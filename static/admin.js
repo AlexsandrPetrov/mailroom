@@ -622,7 +622,7 @@ loaders.settings = async () => {
   const s = (await api('/api/settings')).items;
   const f = $('#settings-form');
   for (const key of ['hostname', 'public_ip', 'message_size_mb', 'mynetworks', 'send_limit_hour', 'send_limit_message',
-    'smtp_limit_hour', 'alert_email', 'telegram_token', 'telegram_chat']) f[key].value = s[key] ?? '';
+    'smtp_limit_hour', 'alert_email', 'telegram_token', 'telegram_chat', 'client_host']) f[key].value = s[key] ?? '';
   $$('input', f).forEach((i) => { i.disabled = me.role !== 'admin'; });
 };
 $('#settings-form').addEventListener('submit', async (e) => {

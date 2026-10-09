@@ -713,7 +713,7 @@ const sform = $('#settings-form');
 function settingsTab(name) {
   $$('#settings-tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   $$('[data-tabpage]', sform).forEach((p) => p.classList.toggle('hidden', p.dataset.tabpage !== name));
-  $('#settings-save').classList.toggle('hidden', ['password', 'contacts', 'connect'].includes(name));
+  $('#settings-save').classList.toggle('hidden', ['password', 'contacts', 'connect', 'dav'].includes(name));
   if (name === 'contacts') loadContacts().catch(fail);
 }
 $$('#settings-tabs .tab').forEach((t) => t.addEventListener('click', () => settingsTab(t.dataset.tab)));
@@ -739,6 +739,14 @@ $('#open-settings').addEventListener('click', async () => {
       <dt>Исходящая (SMTP)</dt><dd><code>${esc(c.smtp)}</code>, авторизация обязательна</dd>
       <dt>Логин</dt><dd><code>${esc(c.login)}</code></dd><dt>Пароль</dt><dd>пароль от этого ящика</dd></dl>
       ${c.ca ? '<p class="small">Сервер использует собственный сертификат. Чтобы почтовая программа и браузер не показывали предупреждения, установите <a href="/mail/ca.crt">корневой сертификат</a> как доверенный (Windows: двойной щелчок → «Установить» → «Доверенные корневые центры»; Android: Настройки → Безопасность → Установить сертификат; Thunderbird: Настройки → Сертификаты → Импортировать).</p>' : ''}`;
+    $('#dav-info').innerHTML = `<p>Календарь и контакты синхронизируются с телефоном и компьютером по CalDAV/CardDAV.
+      Логин — адрес почты, пароль — пароль почты.</p>
+      <dl class="kv"><dt>Сервер</dt><dd><code>${esc(c.dav)}</code></dd><dt>Календарь</dt><dd><code>${esc(c.caldav)}</code></dd>
+      <dt>Контакты</dt><dd><code>${esc(c.carddav)}</code></dd><dt>Логин</dt><dd><code>${esc(c.login)}</code></dd></dl>
+      <p><b>Android</b>: установите DAVx5 → «Вход по URL и имени пользователя» → адрес сервера, логин и пароль. Календарь и контакты появятся в стандартных приложениях.</p>
+      <p><b>iPhone, iPad</b>: сначала установите <a href="/mail/ca.crt">корневой сертификат</a> и включите доверие к нему (Настройки → Основные → Об этом устройстве → Доверие сертификатам). Затем Настройки → Календарь → Учётные записи → Другое → «Уч. запись CalDAV»; для контактов — «Уч. запись CardDAV». Сервер: <code>${esc(c.dav.replace('https://', '').replace(/\/$/, ''))}</code>.</p>
+      <p><b>Thunderbird</b>: Календарь → Новый календарь → В сети → адрес календаря выше; для контактов — Адресная книга → Добавить CardDAV.</p>
+      <p><a href="${esc(c.dav)}.web/" target="_blank" rel="noopener">Веб-интерфейс календарей</a> — создание дополнительных календарей и адресных книг, импорт и экспорт.</p>`;
     $('#settings-error').classList.add('hidden');
     settingsTab('profile');
     $('#settings-dlg').showModal();

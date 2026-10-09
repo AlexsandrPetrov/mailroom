@@ -305,6 +305,8 @@
         <form id="settings-form" class="form-grid">
           <label class="field"><span>Имя почтового сервера (FQDN)</span><input name="hostname" required></label>
           <label class="field"><span>Публичный IPv4 (внешний адрес, если сервер за NAT)</span><input name="public_ip"></label>
+          <label class="field"><span>Адрес сервера для почтовых программ и календаря (пусто — имя сервера)</span><input name="client_host" placeholder="192.168.2.33 или mail.example.com"></label>
+          <div></div>
           <label class="field"><span>Максимальный размер письма, МБ</span><input name="message_size_mb" type="number" min="1" max="100"></label>
           <label class="field"><span>Доверенные сети без пароля (mynetworks)</span><input name="mynetworks"></label>
           <label class="field"><span>Лимит веб-почты: получателей в час</span><input name="send_limit_hour" type="number" min="1"></label>

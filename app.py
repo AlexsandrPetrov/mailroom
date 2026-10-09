@@ -315,6 +315,7 @@ DEFAULT_SETTINGS = {
     "imap_ports": "993",
     "ca_download": "1",
     "smtp_limit_hour": "100",
+    "client_host": "",
     "alert_email": "",
     "telegram_token": "",
     "telegram_chat": "",
@@ -742,7 +743,7 @@ def queue_summary() -> dict:
 @auth_required
 def overview():
     services = [{"name": n, "state": service_state(n)} for n in
-                ("postfix", "dovecot", "rspamd", "redis-server", "postgresql", "fail2ban")]
+                ("postfix", "dovecot", "rspamd", "redis-server", "postgresql", "radicale", "fail2ban")]
     with db() as con:
         counts = con.one("SELECT (SELECT COUNT(*) FROM domains) AS domains, (SELECT COUNT(*) FROM mailboxes) AS mailboxes, "
                          "(SELECT COUNT(*) FROM aliases) AS aliases, "
@@ -1258,6 +1259,7 @@ def create_mailbox():
                          str(data.get("display_name", ""))[:100], now_iso(), now_iso()))
         except IntegrityError:
             raise BadRequest("Такой ящик уже существует", 409)
+    mailcore.helper("dav-init", address)  # календарь и адресная книга по умолчанию
     audit("Ящик создан", f"{address}, квота {quota_mb} МБ")
     return jsonify({"status": "created", "address": address,
                     "generated_password": password if not data.get("password") else None}), 201
@@ -1538,6 +1540,11 @@ def settings_put():
                 raise BadRequest("Публичный IP: адрес IPv4")
             value = str(addr)
         updates["public_ip"] = value
+    if "client_host" in data:
+        value = str(data["client_host"]).strip().lower().rstrip(".")
+        if value and not (valid_hostname(value) and "." in value):
+            raise BadRequest("Адрес для почтовых программ — имя (mail.example.com) или IP")
+        updates["client_host"] = value
     if "webmail_url" in data:
         value = str(data["webmail_url"]).strip()
         if value and not re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?(/[\w./-]*)?", value):
@@ -1795,7 +1802,10 @@ def compute_recommendations(include_domains: bool = True) -> list[dict]:
                              "Для внутренней сети это нормально, но почтовые программы будут предупреждать, "
                              "пока пользователи не установят корневой сертификат (он доступен в веб-почте).",
                              "Для публичного сервера получите сертификат Let's Encrypt (certbot)."))
-    for svc in ("postfix", "dovecot", "rspamd", "redis-server", "postgresql"):
+    services = ["postfix", "dovecot", "rspamd", "redis-server", "postgresql"]
+    if shutil.which("radicale") or Path("/usr/bin/radicale").exists():
+        services.append("radicale")
+    for svc in services:
         if service_state(svc) != "active":
             items.append(rec("fail", "Сервисы", f"Сервис {svc} не работает", "", f"systemctl status {svc}", "logs", alert=True))
     if service_state("fail2ban") != "active":

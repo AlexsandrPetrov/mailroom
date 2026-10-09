@@ -213,12 +213,14 @@ def me():
             quota = box.quota()
     except MailError:
         pass
-    host = settings.get("hostname")
+    host = settings.get("client_host") or settings.get("hostname")
     return jsonify({
         "address": s["address"], "display_name": s["display_name"], "csrf": s["csrf"],
         "signature": prefs["signature"] if prefs else "", "quota": quota, "quota_mb": s["quota_mb"],
         "client": {"imap": f"{host}:993 (SSL/TLS)", "smtp": f"{host}:587 (STARTTLS) или :465 (SSL/TLS)",
-                   "login": s["address"], "ca": CA_PATH.exists()},
+                   "login": s["address"], "ca": CA_PATH.exists(),
+                   "dav": f"https://{host}:5232/", "caldav": f"https://{host}:5232/{s['address']}/calendar/",
+                   "carddav": f"https://{host}:5232/{s['address']}/contacts/"},
         "limits": {"hour": int(settings["send_limit_hour"]), "message": int(settings["send_limit_message"]),
                    "attach_mb": MAX_ATTACH // 1024 // 1024},
     })

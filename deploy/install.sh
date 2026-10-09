@@ -31,7 +31,7 @@ echo '== Пакеты'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq postfix postfix-pgsql dovecot-core dovecot-imapd dovecot-pop3d dovecot-lmtpd \
-  dovecot-pgsql dovecot-sieve dovecot-managesieved rspamd redis-server postgresql sudo fail2ban \
+  dovecot-pgsql dovecot-sieve dovecot-managesieved rspamd redis-server postgresql sudo fail2ban radicale \
   python3-flask python3-psycopg2 python3-passlib python3-cryptography gunicorn dnsutils openssl gnupg openssh-client >/dev/null
 
 mkdir -p "$BACKUP"
@@ -478,6 +478,51 @@ rspamadm configtest >/dev/null
 LIMIT=$(runuser -u postgres -- psql -X -d mailroom -Atc "SELECT value FROM settings WHERE key='smtp_limit_hour'" 2>/dev/null || true)
 /usr/local/sbin/mailroom-helper ratelimit-apply "${LIMIT:-100}" >/dev/null
 
+echo '== Календарь и контакты (Radicale: CalDAV/CardDAV, вход паролем почты)'
+install -d -o radicale -g radicale -m 0750 /etc/radicale/tls
+install -o radicale -g radicale -m 0640 $ETC/tls/fullchain.pem $ETC/tls/server.key /etc/radicale/tls/
+[[ -f /etc/radicale/config.dist ]] || cp /etc/radicale/config /etc/radicale/config.dist
+cat > /etc/radicale/config <<EOF
+# Управляется Mailroom (deploy/install.sh). Пакетный вариант: /etc/radicale/config.dist
+[server]
+hosts = 0.0.0.0:5232
+ssl = True
+certificate = /etc/radicale/tls/fullchain.pem
+key = /etc/radicale/tls/server.key
+max_content_length = 50000000
+
+[encoding]
+request = utf-8
+stock = utf-8
+
+[auth]
+# Логин и пароль — те же, что у почтового ящика: проверка через IMAP Dovecot на localhost.
+type = imap
+imap_host = 127.0.0.1:143
+imap_security = none
+lc_username = True
+cache_logins = True
+delay = 2
+realm = Mailroom
+
+[rights]
+type = owner_only
+
+[storage]
+filesystem_folder = /var/lib/radicale/collections
+
+[web]
+type = internal
+
+[logging]
+level = warning
+EOF
+start_with_lxc_fallback radicale
+# Календарь и адресная книга по умолчанию для существующих ящиков.
+runuser -u postgres -- psql -X -d mailroom -Atc "SELECT address FROM mail_users" | while read -r addr; do
+  [[ -n $addr ]] && /usr/local/sbin/mailroom-helper dav-init "$addr" >/dev/null
+done
+
 echo '== Fail2ban'
 cat > /etc/fail2ban/jail.d/mailroom.local <<'EOF'
 [DEFAULT]
@@ -501,12 +546,16 @@ EOF
 fail2ban-client -t >/dev/null
 
 echo '== Перезапуск сервисов'
-systemctl enable -q redis-server
-if ! systemctl restart redis-server; then
-  # Непривилегированный LXC: sandbox пространств имён systemd недоступен (status=226/NAMESPACE).
-  if journalctl -u redis-server -n 20 --no-pager | grep -q 'NAMESPACE'; then
-    install -d /etc/systemd/system/redis-server.service.d
-    cat > /etc/systemd/system/redis-server.service.d/lxc.conf <<'EOF'
+# Непривилегированный LXC: sandbox пространств имён systemd недоступен (status=226/NAMESPACE).
+# Для такого сервиса подкладываем drop-in без изоляции — только если он иначе не стартует.
+start_with_lxc_fallback() {
+  local unit=$1
+  systemctl enable -q "$unit"
+  systemctl reset-failed "$unit" 2>/dev/null || true
+  systemctl restart "$unit" && return 0
+  journalctl -u "$unit" -n 30 --no-pager | grep -q NAMESPACE || return 1
+  install -d "/etc/systemd/system/$unit.service.d"
+  cat > "/etc/systemd/system/$unit.service.d/lxc.conf" <<'EOF'
 [Service]
 PrivateTmp=no
 PrivateDevices=no
@@ -527,13 +576,11 @@ ReadOnlyPaths=
 NoExecPaths=
 ExecPaths=
 EOF
-    systemctl daemon-reload
-    systemctl reset-failed redis-server
-    systemctl restart redis-server
-  else
-    false
-  fi
-fi
+  systemctl daemon-reload
+  systemctl reset-failed "$unit"
+  systemctl restart "$unit"
+}
+start_with_lxc_fallback redis-server
 systemctl restart rspamd dovecot
 systemctl restart postfix
 systemctl enable -q fail2ban; systemctl restart fail2ban
@@ -541,8 +588,8 @@ systemctl restart mailroom
 
 echo '== Проверки'
 sleep 2
-for s in postfix dovecot rspamd redis-server fail2ban mailroom mailroom-backup.timer mailroom-check.timer; do printf '  %-13s %s\n' "$s" "$(systemctl is-active $s)"; done
-ss -lntp | grep -E ':(25|465|587|993|995|143|4190|'"$PORT"')\b' | awk '{print "  " $4}'
+for s in postfix dovecot rspamd redis-server radicale fail2ban mailroom mailroom-backup.timer mailroom-check.timer; do printf '  %-13s %s\n' "$s" "$(systemctl is-active $s)"; done
+ss -lntp | grep -E ':(25|465|587|993|995|143|4190|5232|'"$PORT"')\b' | awk '{print "  " $4}'
 curl -s --cacert $ETC/tls/ca.crt "https://$LAN_IP:$PORT/api/health" --resolve "$HOSTNAME_FQDN:$PORT:$LAN_IP" >/dev/null \
   && echo "  панель: https://$LAN_IP:$PORT/  веб-почта: https://$LAN_IP:$PORT/mail" || echo '  панель не отвечает — journalctl -u mailroom'
 [[ -f $DATA/.bootstrap-admin ]] && echo "  стартовый пароль администратора: $DATA/.bootstrap-admin"

@@ -9,6 +9,7 @@
   backup-start                                               — запустить копирование в фоне
   backup-list                                                — список копий (JSON)
   ratelimit-apply ЧИСЛО                                      — лимит писем в час на ящик для отправки через 587/465
+  dav-init АДРЕС                                             — календарь и адресная книга по умолчанию (Radicale)
 """
 import ipaddress
 import json
@@ -170,6 +171,37 @@ def ratelimit_apply(value):
     return code
 
 
+def dav_init(address):
+    address = address.strip().lower()
+    local, _, domain = address.partition("@")
+    if not NAME.fullmatch(local) or not DOMAIN.fullmatch(domain):
+        die("Некорректный адрес")
+    root = "/var/lib/radicale/collections/collection-root"
+    if not os.path.isdir("/var/lib/radicale"):
+        die("Radicale не установлен")
+    user_dir = os.path.join(root, address)
+    created = []
+    defaults = {
+        "calendar": {"tag": "VCALENDAR", "D:displayname": "Календарь", "ICAL:calendar-color": "#1d6b48ff",
+                     "C:supported-calendar-component-set": "VEVENT,VTODO"},
+        "contacts": {"tag": "VADDRESSBOOK", "D:displayname": "Контакты"},
+    }
+    for name, props in defaults.items():
+        path = os.path.join(user_dir, name)
+        if os.path.isdir(path):
+            continue
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, ".Radicale.props"), "w", encoding="utf-8") as fh:
+            json.dump(props, fh, ensure_ascii=False)
+        created.append(name)
+    for dirpath, dirnames, filenames in os.walk(os.path.join(root)):
+        shutil.chown(dirpath, "radicale", "radicale")
+        for f in filenames:
+            shutil.chown(os.path.join(dirpath, f), "radicale", "radicale")
+    print("создано: " + ", ".join(created) if created else "уже есть")
+    return 0
+
+
 def main():
     if len(sys.argv) < 2:
         die(__doc__)
@@ -188,6 +220,8 @@ def main():
         return backup_list()
     if cmd == "ratelimit-apply" and len(args) == 1:
         return ratelimit_apply(args[0])
+    if cmd == "dav-init" and len(args) == 1:
+        return dav_init(args[0])
     die("Неизвестная команда")
 
 
