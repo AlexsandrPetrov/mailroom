@@ -1,0 +1,10 @@
+{
+  "platforms": ["debian", "ubuntu"],
+  "hostname": "smtp-gw.example.net",
+  "mail_domain": "example.net",
+  "trusted_networks": ["127.0.0.0/8", "192.0.2.0/24"],
+  "relay_mode": "internet",
+  "services": ["postfix", "dovecot", "rspamd"],
+  "packages": ["postfix", "dovecot-core", "dovecot-imapd", "dovecot-pop3d", "rspamd", "certbot", "swaks", "dnsutils"],
+  "checks": ["os", "hostname", "packages", "postfix", "dns", "ports", "tls"]
+}

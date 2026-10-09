@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Вход · Mailroom</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
+<body class="login-page">
+  <main class="login-card">
+    <div class="brand login-brand"><span class="brand-mark">M</span><span>Mailroom</span></div>
+    <div class="eyebrow">CONTROL PLANE / AUTHENTICATION</div>
+    <h1>Вход в панель</h1>
+    <p class="muted">Доступ только для администратора почтового шлюза.</p>
+    <form id="login-form">
+      <label>Имя пользователя<input name="username" autocomplete="username" value="admin" required></label>
+      <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
+      <label id="otp-field" class="hidden">Код 2FA<input name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="000000"></label>
+      <button class="primary-button login-button" type="submit">Войти</button>
+      <div id="login-error" class="login-error hidden"></div>
+    </form>
+    <small class="login-note">При первом запуске данные bootstrap-администратора записаны в файл <code>.bootstrap-admin</code> с правами 600.</small>
+  </main>
+  <script>
+    const form = document.querySelector('#login-form');
+    const error = document.querySelector('#login-error');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(form));
+      const endpoint = document.querySelector('#otp-field').classList.contains('hidden') ? '/api/auth/login' : '/api/auth/verify-2fa';
+      const response = await fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
+      const result = await response.json();
+      if (!response.ok) { error.textContent = result.error; error.classList.remove('hidden'); return; }
+      if (result.status === 'requires_2fa') {
+        document.querySelector('#otp-field').classList.remove('hidden');
+        document.querySelector('[name="otp"]').required = true;
+        document.querySelector('.login-button').textContent = 'Подтвердить код';
+        error.textContent = 'Введите код из приложения 2FA';
+        error.classList.remove('hidden');
+        return;
+      }
+      location.href = '/';
+    });
+  </script>
+</body>
+</html>

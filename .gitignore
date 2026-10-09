@@ -1,0 +1,9 @@
+.db-url
+.db-password
+.bootstrap-*
+.session-secret
+.totp-*
+*.sqlite3
+__pycache__/
+.venv/
+*.pyc
