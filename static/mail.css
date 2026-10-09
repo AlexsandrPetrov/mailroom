@@ -218,3 +218,4 @@ dialog.preview { width: min(1100px, calc(100% - 20px)); }
 .attachment-wrap { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .attachment-wrap .attachment { border: 0; border-radius: 0; }
 .attachment-wrap button { border: 0; border-left: 1px solid var(--line); background: none; padding: 6px 10px; cursor: pointer; color: var(--accent); }
+.thread-content .reader-meta { padding: 6px 20px 10px; }

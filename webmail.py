@@ -715,6 +715,8 @@ def build_message(data: dict, files, me: dict, draft: bool = False):
         if len(body_html) > 15_000_000:
             bad("Слишком большое письмо")
         clean, related = mailcore.split_data_images(mailcore.sanitize_html(body_html))
+        # Цитату оформляем так же, как почтовые клиенты (стили санитайзер не пропускает — добавляем свои).
+        clean = clean.replace("<blockquote>", '<blockquote style="margin:0 0 0 .8ex;border-left:2px solid #ccc;padding-left:1ex">')
         msg.set_content(mailcore.html_to_text(clean))
         msg.add_alternative('<!doctype html><html><head><meta charset="utf-8"></head><body>'
                             '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5">'
