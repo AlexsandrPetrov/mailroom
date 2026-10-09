@@ -33,7 +33,10 @@ start_with_lxc_fallback() {
   local unit=$1
   systemctl enable -q "$unit"
   systemctl reset-failed "$unit" 2>/dev/null || true
-  systemctl restart "$unit" && return 0
+  # Для Type=simple restart «успешен» до падения процесса — проверяем состояние через пару секунд.
+  systemctl restart "$unit" || true
+  sleep 3
+  systemctl is-active -q "$unit" && return 0
   journalctl -u "$unit" -n 30 --no-pager | grep -q NAMESPACE || return 1
   install -d "/etc/systemd/system/$unit.service.d"
   cat > "/etc/systemd/system/$unit.service.d/lxc.conf" <<'EOF'
@@ -60,6 +63,8 @@ EOF
   systemctl daemon-reload
   systemctl reset-failed "$unit"
   systemctl restart "$unit"
+  sleep 2
+  systemctl is-active -q "$unit"
 }
 
 echo '== Пакеты'
