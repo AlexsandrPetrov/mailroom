@@ -80,7 +80,8 @@ async function loadMe() {
 }
 
 // ---------- папки ----------
-const ICONS = {INBOX: '📥', Drafts: '📝', Sent: '📤', Junk: '⛔', Trash: '🗑'};
+const icon = (name, cls = '') => `<svg class="i${cls ? ' ' + cls : ''}" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
+const ICONS = {INBOX: 'inbox', Drafts: 'draft', Sent: 'send', Junk: 'ban', Trash: 'trash'};
 async function loadFolders() {
   state.folders = (await api('/api/mail/folders')).items;
   const list = $('#folder-list');
@@ -91,7 +92,7 @@ async function loadFolders() {
     button.dataset.folder = f.name;
     const depth = f.system ? 0 : f.name.split('/').length - 1;
     button.style.paddingLeft = `${10 + depth * 14}px`;
-    button.innerHTML = `<span>${ICONS[f.special] || '📁'}</span><span class="name"></span><span class="count"></span>`;
+    button.innerHTML = `${icon(ICONS[f.special] || 'folder')}<span class="name"></span><span class="count"></span>`;
     $('.name', button).textContent = f.title;
     $('.count', button).textContent = f.unseen && f.special !== 'Sent' && f.special !== 'Drafts' ? f.unseen : (f.special === 'Drafts' && f.total ? f.total : '');
     button.title = f.name;
@@ -193,9 +194,9 @@ function renderList() {
     $('.date', row).textContent = fmtDate(m.date);
     $('.subj', row).textContent = m.subject || '(без темы)';
     const marks = [];
-    if (m.flags.includes('\\Flagged')) marks.push('<span class="flag">★ важное</span>');
-    if (m.has_attachments) marks.push('<span>📎</span>');
-    if (m.flags.includes('\\Answered')) marks.push('<span>↩ отвечено</span>');
+    if (m.flags.includes('\\Flagged')) marks.push(`<span class="flag">${icon('star', 'fill')} важное</span>`);
+    if (m.has_attachments) marks.push(`<span>${icon('clip')} вложение</span>`);
+    if (m.flags.includes('\\Answered')) marks.push(`<span>${icon('reply')} отвечено</span>`);
     marks.push(`<span>${esc(fmtSize(m.size || 0))}</span>`);
     $('.marks', row).innerHTML = marks.join('');
     row.addEventListener('click', () => (folderInfo().special === 'Drafts' ? openCompose('draft', m.uid) : openMessage(m.uid)));
@@ -290,13 +291,13 @@ function renderMessage() {
   const f = folderInfo();
   view.innerHTML = `<div class="reader-head"><h1></h1><dl class="reader-meta"></dl>
     <div class="reader-actions">
-      <button class="btn" data-act="reply">↩ Ответить</button><button class="btn" data-act="replyall">↩↩ Всем</button>
-      <button class="btn" data-act="forward">→ Переслать</button>
-      <button class="btn" data-act="flag">${m.flags.includes('\\Flagged') ? '☆ Не важное' : '★ Важное'}</button>
-      <button class="btn" data-act="unread">● Не прочитано</button>
-      <button class="btn" data-act="${f.special === 'Junk' ? 'notspam' : 'spam'}">${f.special === 'Junk' ? 'Не спам' : '⛔ Спам'}</button>
-      <button class="btn danger" data-act="delete">🗑 Удалить</button>
-      <button class="btn" data-act="raw">Исходник</button></div></div>
+      <button class="btn" data-act="reply">${icon('reply')} Ответить</button><button class="btn" data-act="replyall">${icon('replyall')} Всем</button>
+      <button class="btn" data-act="forward">${icon('forward')} Переслать</button>
+      <button class="btn" data-act="flag">${icon('star', m.flags.includes('\\Flagged') ? 'fill' : '')} ${m.flags.includes('\\Flagged') ? 'Не важное' : 'Важное'}</button>
+      <button class="btn" data-act="unread">${icon('dot')} Не прочитано</button>
+      <button class="btn" data-act="${f.special === 'Junk' ? 'notspam' : 'spam'}">${icon('ban')} ${f.special === 'Junk' ? 'Не спам' : 'Спам'}</button>
+      <button class="btn danger" data-act="delete">${icon('trash')} Удалить</button>
+      <button class="btn" data-act="raw">${icon('code')} Исходник</button></div></div>
     <div class="reader-body"></div><div class="attachments hidden"></div>`;
   $('h1', view).textContent = m.subject || '(без темы)';
   const meta = $('.reader-meta', view);
@@ -334,7 +335,8 @@ function renderMessage() {
       const link = document.createElement('a');
       link.className = 'attachment';
       link.href = `/api/mail/attachment?${q({folder: state.folder, uid: m.uid, index: a.index})}`;
-      link.textContent = `📎 ${a.filename} · ${fmtSize(a.size)}`;
+      link.innerHTML = icon('clip');
+      link.append(` ${a.filename} · ${fmtSize(a.size)}`);
       link.title = a.filename;
       att.appendChild(link);
     }
@@ -404,10 +406,11 @@ function renderFiles() {
   for (const item of all) {
     const chip = document.createElement('span');
     chip.className = 'chip';
-    chip.textContent = `📎 ${item.name} · ${fmtSize(item.size)}`;
+    chip.innerHTML = icon('clip');
+    chip.append(` ${item.name} · ${fmtSize(item.size)}`);
     const x = document.createElement('button');
     x.type = 'button';
-    x.textContent = '×';
+    x.innerHTML = icon('close');
     x.title = 'Убрать';
     x.addEventListener('click', () => { (item.kind === 'keep' ? state.compose.keep : state.compose.files).splice(item.i, 1); renderFiles(); });
     chip.appendChild(x);
@@ -555,7 +558,7 @@ function renderFilters() {
     row.className = 'rule';
     row.innerHTML = `<input type="checkbox" title="Включено"><select data-k="field"><option value="from">От кого</option><option value="to">Кому/копия</option><option value="subject">Тема</option></select>
       <input data-k="value" placeholder="содержит…"><select data-k="action"><option value="move">переместить в</option><option value="read">пометить прочитанным</option><option value="delete">удалить</option></select>
-      <select data-k="folder"></select><button class="icon" type="button" title="Удалить правило">×</button>`;
+      <select data-k="folder"></select><button class="icon" type="button" title="Удалить правило">${icon('close')}</button>`;
     const fsel = $('[data-k="folder"]', row);
     for (const f of folderOptions) { const o = document.createElement('option'); o.value = f.name; o.textContent = f.title; fsel.appendChild(o); }
     $('input[type=checkbox]', row).checked = rule.enabled !== false;
@@ -619,7 +622,7 @@ async function loadContacts() {
   for (const c of d.items) {
     const row = document.createElement('div');
     row.className = 'msg';
-    row.innerHTML = '<span></span><span class="who"></span><button class="icon" type="button" title="Удалить">×</button><span class="subj"></span>';
+    row.innerHTML = `<span></span><span class="who"></span><button class="icon" type="button" title="Удалить">${icon('close')}</button><span class="subj"></span>`;
     $('.who', row).textContent = c.name || c.email;
     $('.subj', row).textContent = c.email;
     $('button', row).addEventListener('click', async () => { await api(`/api/mail/contacts/${c.id}`, {method: 'DELETE'}).catch(fail); loadContacts(); });

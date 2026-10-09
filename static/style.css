@@ -31,7 +31,7 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 nav { display: grid; gap: 2px; }
 .nav-item { border: 0; background: transparent; color: #a9bbb5; text-align: left; padding: 9px 10px; border-radius: 9px;
   cursor: pointer; display: flex; gap: 11px; align-items: center; font-size: 14px; }
-.nav-item .ico { width: 18px; text-align: center; color: #88a49a; }
+.nav-item .ico { width: 18px; display: inline-flex; color: #88a49a; }
 .nav-item:hover, .nav-item.active { background: var(--side-2); color: #fff; }
 .nav-item.active .ico { color: var(--mint); }
 .nav-badge { margin-left: auto; background: var(--fail); color: #fff; border-radius: 10px; padding: 0 7px; font: 11px var(--mono); }
@@ -185,3 +185,9 @@ dialog.modal::backdrop { background: rgba(13, 29, 25, .6); }
   .rec { grid-template-columns: 1fr; gap: 6px; }
   .section-intro h2 { font-size: 23px; }
 }
+
+/* SVG-иконки (без эмодзи) */
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.i { width: 18px; height: 18px; flex: none; vertical-align: -4px; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; }
+.i.fill { fill: currentColor; }

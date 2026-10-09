@@ -162,3 +162,9 @@ dialog::backdrop { background: rgba(10, 20, 17, .55); }
 .stack { display: grid; gap: 12px; }
 .span2 { grid-column: 1 / -1; }
 .reader-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+/* SVG-иконки (без эмодзи) */
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.i { width: 18px; height: 18px; flex: none; vertical-align: -4px; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; }
+.i.fill { fill: currentColor; }

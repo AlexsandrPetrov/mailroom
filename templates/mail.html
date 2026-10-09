@@ -8,9 +8,10 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='mail.css') }}">
 </head>
 <body class="view-list">
+{% include "_icons.html" %}
 <div class="app">
   <header class="topbar">
-    <button class="icon back" id="back" aria-label="Назад">←</button>
+    <button class="icon back" id="back" aria-label="Назад"><svg class="i" aria-hidden="true"><use href="#i-back"></use></svg></button>
     <div class="brand"><span class="brand-mark">M</span><span>Почта</span></div>
     <form class="search" id="search-form" role="search">
       <input id="search" type="search" placeholder="Поиск в папке  ( / )" aria-label="Поиск">
@@ -20,16 +21,16 @@
       </select>
     </form>
     <span class="who" id="who"></span>
-    <button class="icon" id="open-settings" title="Настройки">⚙</button>
-    <button class="icon" id="logout" title="Выйти">⎋</button>
+    <button class="icon" id="open-settings" title="Настройки"><svg class="i" aria-hidden="true"><use href="#i-sliders"></use></svg></button>
+    <button class="icon" id="logout" title="Выйти"><svg class="i" aria-hidden="true"><use href="#i-logout"></use></svg></button>
   </header>
 
   <div class="main">
     <aside class="folders" id="folders-pane">
-      <button class="btn primary compose" id="compose-btn">✎ Написать</button>
+      <button class="btn primary compose" id="compose-btn"><svg class="i" aria-hidden="true"><use href="#i-pencil"></use></svg> Написать</button>
       <div id="folder-list"></div>
       <div class="folders-foot">
-        <button class="btn small" id="folder-new">+ Папка</button>
+        <button class="btn small" id="folder-new"><svg class="i" aria-hidden="true"><use href="#i-plus"></use></svg> Папка</button>
         <div id="quota" class="small muted"></div>
       </div>
     </aside>
@@ -38,16 +39,16 @@
       <div class="list-title" id="list-title">Входящие</div>
       <div class="list-toolbar">
         <input type="checkbox" id="select-all" title="Выбрать все" aria-label="Выбрать все">
-        <button class="icon" data-bulk="read" title="Прочитано">✉</button>
-        <button class="icon" data-bulk="unread" title="Не прочитано">●</button>
-        <button class="icon" data-bulk="flag" title="Важное">★</button>
-        <button class="icon" data-bulk="spam" title="В спам" id="bulk-spam">⛔</button>
-        <button class="icon" data-bulk="delete" title="Удалить">🗑</button>
+        <button class="icon" data-bulk="read" title="Прочитано"><svg class="i" aria-hidden="true"><use href="#i-mail"></use></svg></button>
+        <button class="icon" data-bulk="unread" title="Не прочитано"><svg class="i" aria-hidden="true"><use href="#i-dot"></use></svg></button>
+        <button class="icon" data-bulk="flag" title="Важное"><svg class="i" aria-hidden="true"><use href="#i-star"></use></svg></button>
+        <button class="icon" data-bulk="spam" title="В спам" id="bulk-spam"><svg class="i" aria-hidden="true"><use href="#i-ban"></use></svg></button>
+        <button class="icon" data-bulk="delete" title="Удалить"><svg class="i" aria-hidden="true"><use href="#i-trash"></use></svg></button>
         <select id="bulk-move" aria-label="Переместить"><option value="">Переместить…</option></select>
         <span class="grow"></span>
         <label class="check small"><input type="checkbox" id="filter-unseen"> непрочит.</label>
         <label class="check small"><input type="checkbox" id="filter-flagged"> важные</label>
-        <button class="icon" id="refresh" title="Обновить">↻</button>
+        <button class="icon" id="refresh" title="Обновить"><svg class="i" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
       </div>
       <div class="list-toolbar hidden" id="folder-tools">
         <button class="btn small" id="folder-empty">Очистить папку</button>
@@ -55,7 +56,7 @@
         <button class="btn small danger" id="folder-delete">Удалить папку</button>
       </div>
       <div class="messages" id="messages"><div class="empty">Загрузка…</div></div>
-      <div class="pager"><button class="btn" id="prev">←</button><span id="page-info"></span><button class="btn" id="next">→</button></div>
+      <div class="pager"><button class="btn" id="prev" aria-label="Назад"><svg class="i" aria-hidden="true"><use href="#i-back"></use></svg></button><span id="page-info"></span><button class="btn" id="next" aria-label="Вперёд"><svg class="i" aria-hidden="true"><use href="#i-forward"></use></svg></button></div>
     </section>
 
     <section class="reader" id="reader">
@@ -67,7 +68,7 @@
 
 <dialog id="compose-dlg">
   <form class="dlg compose" id="compose-form" method="dialog">
-    <div class="dlg-head"><h2 id="compose-title">Новое письмо</h2><button class="icon" value="cancel" formnovalidate aria-label="Закрыть">×</button></div>
+    <div class="dlg-head"><h2 id="compose-title">Новое письмо</h2><button class="icon" value="cancel" formnovalidate aria-label="Закрыть"><svg class="i" aria-hidden="true"><use href="#i-close"></use></svg></button></div>
     <div class="dlg-body">
       <div class="compose-row"><span>Кому</span><input name="to" autocomplete="off" data-suggest></div>
       <div class="compose-row"><span>Копия</span><input name="cc" autocomplete="off" data-suggest></div>
@@ -78,7 +79,7 @@
       <div class="error hidden" id="compose-error"></div>
     </div>
     <div class="dlg-foot">
-      <label class="btn">📎 Вложить<input type="file" id="compose-attach" multiple hidden></label>
+      <label class="btn"><svg class="i" aria-hidden="true"><use href="#i-clip"></use></svg> Вложить<input type="file" id="compose-attach" multiple hidden></label>
       <button class="btn" type="button" id="show-bcc">Скрытая копия</button>
       <span class="grow small muted" id="compose-status"></span>
       <button class="btn" type="button" id="compose-draft">В черновики</button>
@@ -89,7 +90,7 @@
 
 <dialog id="settings-dlg">
   <div class="dlg">
-    <div class="dlg-head"><h2>Настройки</h2><button class="icon" id="settings-close" aria-label="Закрыть">×</button></div>
+    <div class="dlg-head"><h2>Настройки</h2><button class="icon" id="settings-close" aria-label="Закрыть"><svg class="i" aria-hidden="true"><use href="#i-close"></use></svg></button></div>
     <div class="tabs" id="settings-tabs">
       <button class="tab active" data-tab="profile">Профиль</button>
       <button class="tab" data-tab="vacation">Автоответ</button>
