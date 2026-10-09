@@ -450,8 +450,12 @@ ProtectClock=no
 ProtectKernelLogs=no
 PrivateUsers=no
 RestrictNamespaces=no
+ProtectProc=default
+ProcSubset=all
 ReadWritePaths=
 ReadOnlyPaths=
+NoExecPaths=
+ExecPaths=
 EOF
     systemctl daemon-reload
     systemctl reset-failed redis-server
