@@ -194,7 +194,7 @@ def dav_init(address):
         with open(os.path.join(path, ".Radicale.props"), "w", encoding="utf-8") as fh:
             json.dump(props, fh, ensure_ascii=False)
         created.append(name)
-    for dirpath, dirnames, filenames in os.walk(os.path.join(root)):
+    for dirpath, dirnames, filenames in os.walk("/var/lib/radicale/collections"):
         shutil.chown(dirpath, "radicale", "radicale")
         for f in filenames:
             shutil.chown(os.path.join(dirpath, f), "radicale", "radicale")
