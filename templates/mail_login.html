@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Почта · Вход</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='mail.css') }}">
+</head>
+<body class="login">
+  <main class="login-card">
+    <div class="brand"><span class="brand-mark">M</span><span>Почта</span></div>
+    <h1>Вход в почту</h1>
+    <p class="muted">Используйте полный адрес ящика и его пароль.</p>
+    <form id="login-form">
+      <label class="field">Адрес<input name="address" type="email" required autocomplete="username" placeholder="name@example.com" autofocus></label>
+      <label class="field">Пароль<input name="password" type="password" required autocomplete="current-password"></label>
+      <button class="btn primary" type="submit">Войти</button>
+      <div class="error hidden" id="login-error" role="alert"></div>
+    </form>
+    <p class="small muted">Забыли пароль? Обратитесь к администратору почты.</p>
+  </main>
+  <script src="{{ url_for('static', filename='mail_login.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,137 @@
+#!/usr/bin/python3 -I
+"""Привилегированный помощник Mailroom. Вызывается через sudo только пользователем mailroom.
+
+Белый список подкоманд, строгая проверка аргументов, без shell.
+  queue-delete|queue-hold|queue-release|queue-requeue ID...   — операции с очередью Postfix
+  quota                                                      — занятое место всех ящиков (JSON)
+  postconf-apply  (JSON в stdin)                             — myhostname, mynetworks, message_size_limit
+  maildir-archive ДОМЕН ИМЯ                                  — перенести письма удалённого ящика в архив
+"""
+import ipaddress
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+QUEUE_ID = re.compile(r"[0-9A-Za-z]{6,20}")
+NAME = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?")
+DOMAIN = re.compile(r"(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
+HOST = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
+VMAIL = "/var/vmail"
+
+
+def die(message, code=2):
+    print(message)
+    sys.exit(code)
+
+
+def run(cmd, **kw):
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, **kw)
+    return result.returncode, (result.stdout + result.stderr).strip()
+
+
+def queue(action, ids):
+    if not ids or len(ids) > 200 or not all(QUEUE_ID.fullmatch(i) for i in ids):
+        die("Некорректные ID очереди")
+    flag = {"queue-delete": "-d", "queue-hold": "-h", "queue-release": "-H", "queue-requeue": "-r"}[action]
+    code, out = run(["/usr/sbin/postsuper", flag, "-"], input="\n".join(ids) + "\n")
+    print(out or "ok")
+    return code
+
+
+def quota():
+    code, out = run(["/usr/bin/doveadm", "-f", "json", "quota", "get", "-A"])
+    if code != 0:
+        die(out or "doveadm quota failed", 1)
+    result = {}
+    for row in json.loads(out or "[]"):
+        user = row.get("username") or row.get("user")
+        if not user:
+            continue
+        item = result.setdefault(user, {})
+        kind = (row.get("type") or "").upper()
+        try:
+            value = int(row.get("value") or 0)
+        except ValueError:
+            value = 0
+        if kind == "STORAGE":
+            item["bytes"] = value * 1024
+        elif kind == "MESSAGE":
+            item["messages"] = value
+    print(json.dumps(result))
+    return 0
+
+
+def postconf_apply():
+    data = json.load(sys.stdin)
+    settings = []
+    host = str(data.get("myhostname", "")).strip().lower()
+    if host:
+        if not HOST.fullmatch(host):
+            die("Некорректное имя сервера")
+        settings.append(f"myhostname = {host}")
+    nets = str(data.get("mynetworks", "")).split()
+    if nets:
+        clean = [str(ipaddress.ip_network(n, strict=False)) for n in nets[:20]]
+        if "127.0.0.0/8" not in clean:
+            clean.insert(0, "127.0.0.0/8")
+        settings.append("mynetworks = " + " ".join(clean))
+    size = int(data.get("message_size_limit", 0) or 0)
+    if size:
+        if not 1048576 <= size <= 104857600:
+            die("Размер письма: от 1 до 100 МБ")
+        settings.append(f"message_size_limit = {size}")
+    if not settings:
+        die("Нечего применять")
+    for line in settings:
+        code, out = run(["/usr/sbin/postconf", "-e", line])
+        if code:
+            die(out, 1)
+    code, out = run(["/usr/sbin/postfix", "check"])
+    if code:
+        die("postfix check: " + out, 1)
+    code, out = run(["/usr/bin/systemctl", "reload", "postfix"])
+    if code:
+        die(out, 1)
+    print("; ".join(settings))
+    return 0
+
+
+def maildir_archive(domain, name):
+    if not DOMAIN.fullmatch(domain) or not NAME.fullmatch(name) or ".." in name:
+        die("Некорректный адрес")
+    src = os.path.join(VMAIL, domain, name)
+    if os.path.realpath(src) != src or not src.startswith(VMAIL + "/"):
+        die("Недопустимый путь")
+    if not os.path.isdir(src):
+        print("каталога писем нет")
+        return 0
+    archive = os.path.join(VMAIL, ".deleted")
+    os.makedirs(archive, mode=0o700, exist_ok=True)
+    shutil.chown(archive, "vmail", "vmail")
+    dst = os.path.join(archive, f"{time.strftime('%Y%m%d-%H%M%S')}-{name}@{domain}")
+    os.rename(src, dst)
+    print(dst)
+    return 0
+
+
+def main():
+    if len(sys.argv) < 2:
+        die(__doc__)
+    cmd, args = sys.argv[1], sys.argv[2:]
+    if cmd.startswith("queue-") and cmd in ("queue-delete", "queue-hold", "queue-release", "queue-requeue"):
+        return queue(cmd, args)
+    if cmd == "quota" and not args:
+        return quota()
+    if cmd == "postconf-apply" and not args:
+        return postconf_apply()
+    if cmd == "maildir-archive" and len(args) == 2:
+        return maildir_archive(*args)
+    die("Неизвестная команда")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

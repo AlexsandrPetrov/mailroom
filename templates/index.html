@@ -3,70 +3,329 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Mailroom / Шлюз</title>
+  <title>Mailroom</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <aside class="sidebar">
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
     <div class="brand"><span class="brand-mark">M</span><span>Mailroom</span></div>
-    <div class="eyebrow">CONTROL PLANE</div>
-    <nav>
-      <button class="nav-item active" data-section="overview"><span>⌂</span> Обзор</button>
-      <button class="nav-item" data-section="queue"><span>↗</span> Очередь</button>
-      <button class="nav-item" data-section="collectors"><span>⇣</span> Сборщики</button>
-      <button class="nav-item" data-section="domains"><span>◎</span> Домены</button>
-      <button class="nav-item" data-section="mailboxes"><span>▣</span> Ящики</button>
-      <button class="nav-item" data-section="config"><span>◌</span> Конфигурация</button>
-      <button class="nav-item" data-section="journal"><span>≡</span> Журнал</button>
-      <button class="nav-item" data-section="logs"><span>⌁</span> Логи</button>
-      <button class="nav-item" data-section="security"><span>◇</span> Безопасность</button>
-      <button class="nav-item" data-section="users"><span>♙</span> Пользователи</button>
-      <button class="nav-item" data-section="diagnostics"><span>⌕</span> Диагностика</button>
-      <button class="nav-item" data-section="setup"><span>⚙</span> Установка</button>
-      <button class="nav-item" data-section="settings"><span>◌</span> Настройки</button>
+    <nav id="nav">
+      <button class="nav-item active" data-section="overview"><span class="ico">⌂</span>Обзор</button>
+      <button class="nav-item" data-section="recommendations"><span class="ico">✓</span>Рекомендации<span class="nav-badge hidden" id="rec-badge"></span></button>
+      <div class="nav-group">Почта</div>
+      <button class="nav-item" data-section="domains"><span class="ico">◎</span>Домены и DNS</button>
+      <button class="nav-item" data-section="mailboxes"><span class="ico">▣</span>Ящики</button>
+      <button class="nav-item" data-section="aliases"><span class="ico">⇄</span>Алиасы</button>
+      <div class="nav-group">Доставка</div>
+      <button class="nav-item" data-section="queue"><span class="ico">↗</span>Очередь</button>
+      <button class="nav-item" data-section="trace"><span class="ico">⌕</span>Трассировка</button>
+      <button class="nav-item" data-section="diagnostics"><span class="ico">⚕</span>Проверки</button>
+      <button class="nav-item" data-section="logs"><span class="ico">⌁</span>Логи</button>
+      <div class="nav-group">Система</div>
+      <button class="nav-item" data-section="journal"><span class="ico">≡</span>Журнал действий</button>
+      <button class="nav-item" data-section="config"><span class="ico">◌</span>Конфигурация Postfix</button>
+      <button class="nav-item" data-section="settings"><span class="ico">⚙</span>Настройки</button>
+      <button class="nav-item" data-section="users"><span class="ico">♙</span>Пользователи</button>
+      <button class="nav-item" data-section="security"><span class="ico">◇</span>Безопасность</button>
     </nav>
-    <div class="sidebar-foot"><span class="pulse"></span> Локальный контур<br><small>read-only MVP</small></div>
+    <div class="sidebar-foot">
+      Mailroom {{ version }}<br>
+      <a href="/mail" target="_blank" rel="noopener">Веб-почта →</a><br>
+      <a href="{{ article_url }}" target="_blank" rel="noopener">Инструкция →</a>
+    </div>
   </aside>
 
   <main class="content">
     <header class="topbar">
-      <div><div class="eyebrow">SMTP GATEWAY</div><h1 id="page-title">Обзор системы</h1></div>
-      <div class="top-actions"><span class="host" id="host-name">подключение...</span><button class="icon-button" id="refresh">↻</button><button class="logout-button" id="logout">Выйти</button></div>
+      <div class="actions">
+        <button class="icon-button menu-toggle" id="menu-toggle" aria-label="Меню">☰</button>
+        <div><div class="eyebrow" id="page-eyebrow">Почтовый сервер</div><h1 id="page-title">Обзор</h1></div>
+      </div>
+      <div class="top-actions">
+        <span class="host" id="host-name"></span>
+        <span class="host" id="whoami"></span>
+        <button class="icon-button" id="refresh" title="Обновить">↻</button>
+        <button class="logout-button" id="logout">Выйти</button>
+      </div>
     </header>
-
     <div id="notice" class="notice hidden"></div>
 
-    <section id="section-overview" class="page-section">
-      <div class="hero"><div><div class="eyebrow">СОСТОЯНИЕ УЗЛА</div><h2>Почта под контролем.</h2><p>Единая точка наблюдения за Postfix, очередью и внешними сборщиками.</p></div><div class="hero-stamp">LOCAL<br><strong>01</strong></div></div>
+    <!-- Обзор -->
+    <section data-page="overview">
+      <div class="hero">
+        <div><div class="eyebrow">Состояние</div><h2 id="hero-title">Загрузка…</h2><p id="hero-text"></p></div>
+        <button class="primary-button" data-goto="recommendations">Открыть рекомендации</button>
+      </div>
       <div class="metrics" id="metrics"></div>
-      <div class="split-grid">
-        <article class="panel"><div class="panel-head"><div><div class="eyebrow">СЕРВИСЫ</div><h3>Компоненты узла</h3></div><span class="live-dot">LIVE</span></div><div id="services" class="service-list"></div></article>
-        <article class="panel accent-panel"><div class="panel-head"><div><div class="eyebrow">БЫСТРЫЙ ОБЗОР</div><h3>Маршрут сообщения</h3></div><span class="route-icon">→</span></div><div class="route"><span>Клиент</span><i></i><span>Postfix</span><i></i><span>Доставка</span></div><p class="muted">Операции изменения конфигурации будут добавлены после подключения авторизации.</p></article>
+      <div class="grid-2">
+        <article class="panel"><div class="eyebrow">Сервисы</div><h3>Компоненты</h3><div id="services"></div></article>
+        <article class="panel"><div class="eyebrow">Rspamd</div><h3>Фильтрация</h3><div id="rspamd"></div>
+          <p class="muted">Маршрут письма: Интернет → Postfix :25 → Rspamd (спам, DKIM) → Dovecot LMTP → ящик.
+            Отправка: клиент → :587/:465 с паролем → Rspamd подписывает DKIM → получатель.</p></article>
       </div>
     </section>
 
-    <section id="section-queue" class="page-section hidden"><div class="section-intro"><div><div class="eyebrow">DELIVERY PIPELINE</div><h2>Очередь доставки</h2><p>Снимок очереди Postfix без доступа к содержимому сообщений.</p></div></div><article class="panel"><div class="queue-large" id="queue-large"></div><div class="terminal" id="queue-raw">Ожидание данных...</div></article></section>
+    <!-- Рекомендации -->
+    <section data-page="recommendations" class="hidden">
+      <div class="section-intro">
+        <div><h2>Рекомендации</h2><p>Живая проверка DNS, TLS, сервисов, репутации и безопасности. Каждый пункт — с объяснением и способом исправить.</p></div>
+        <button class="primary-button" id="rec-run">Проверить заново</button>
+      </div>
+      <div class="metrics" id="rec-summary"></div>
+      <article class="panel"><div id="rec-list" class="empty">Проверка…</div></article>
+      <article class="panel">
+        <div class="eyebrow">Памятка</div><h3>Что нужно, чтобы почту принимали</h3>
+        <ol class="muted">
+          <li><b>PTR</b> IP-адреса указывает на имя сервера, а A-запись имени — обратно на этот IP (настраивается у провайдера).</li>
+          <li><b>SPF</b> — одна запись на домен, перечислены все, кто отправляет от имени домена. <code>-all</code> — если других источников нет.</li>
+          <li><b>DKIM</b> — ключ 2048 бит, публичная часть в DNS, подпись включается после проверки публикации. Ключ меняйте раз в 6–12 месяцев.</li>
+          <li><b>DMARC</b> — начинайте с <code>p=none</code> и отчётов на dmarc@домен. Через 2–4 недели без ошибок — <code>p=quarantine</code>, затем <code>p=reject</code>.</li>
+          <li>Адреса <b>postmaster@</b> и <b>abuse@</b> должны принимать почту.</li>
+          <li>Порт 25 открыт в обе стороны, IP не в чёрных списках, сервер не является открытым relay (проверка — только с внешней машины).</li>
+          <li>Сертификат TLS доверенный и на имя сервера; без него почтовые программы показывают предупреждения.</li>
+        </ol>
+        <p class="muted">Подробно: <a href="{{ article_url }}" target="_blank" rel="noopener">статья о настройке почтового сервера</a>.</p>
+      </article>
+    </section>
 
-    <section id="section-collectors" class="page-section hidden"><div class="section-intro"><div><div class="eyebrow">EXTERNAL INBOXES</div><h2>Сборщики почты</h2><p>Периодический импорт из IMAP/POP3 во внутренний маршрут.</p></div><button class="primary-button" disabled>+ Новый сборщик</button></div><div class="collector-grid" id="collectors"></div></section>
+    <!-- Домены -->
+    <section data-page="domains" class="hidden">
+      <div class="section-intro">
+        <div><h2>Домены и DNS</h2><p>Обслуживаемые домены, квоты, ключи DKIM и записи DNS с живой проверкой.</p></div>
+        <button class="primary-button" data-write id="new-domain">+ Домен</button>
+      </div>
+      <article class="panel"><div class="table-wrap"><table>
+        <thead><tr><th>Домен</th><th>Статус</th><th>DKIM</th><th class="num">Ящики</th><th class="num">Алиасы</th><th class="num">Квота</th><th></th></tr></thead>
+        <tbody id="domains-table"></tbody></table></div></article>
+      <article class="panel hidden" id="domain-detail">
+        <div class="panel-head">
+          <div><div class="eyebrow">Домен</div><h3 id="dd-name"></h3></div>
+          <div class="actions"><button class="secondary-button" id="dd-check">Проверить DNS</button><button class="link-button" id="dd-close">Закрыть</button></div>
+        </div>
+        <div class="tabs" id="dd-tabs">
+          <button class="tab active" data-tab="records">Записи DNS</button>
+          <button class="tab" data-tab="dkim">DKIM</button>
+          <button class="tab" data-tab="policy">SPF и DMARC</button>
+          <button class="tab" data-tab="props">Параметры</button>
+        </div>
+        <div data-tabpage="records">
+          <p class="muted">Опубликуйте записи у DNS-провайдера домена. «Проверить DNS» сравнивает их с тем, что видно в Интернете (обновление DNS может занимать до нескольких часов).</p>
+          <div id="dd-records"></div>
+        </div>
+        <div data-tabpage="dkim" class="hidden">
+          <div id="dd-dkim"></div>
+          <div class="inline-form" data-write>
+            <input id="dkim-selector" placeholder="селектор, например mr202610" maxlength="32">
+            <select id="dkim-bits"><option value="2048">2048 бит (рекомендуется)</option><option value="1024">1024 бит (только если DNS-панель не принимает длинные TXT)</option></select>
+            <button class="primary-button" id="dkim-generate">Создать ключ</button>
+          </div>
+          <p class="muted">Порядок: создать ключ → опубликовать TXT-запись → «Проверить и включить». Пока подпись не включена, письма уходят без DKIM, но и без ошибок у получателей. При смене ключа старый продолжает подписывать, пока новый не подтверждён; старую TXT-запись оставьте ещё на неделю.</p>
+        </div>
+        <div data-tabpage="policy" class="hidden">
+          <form id="policy-form" class="form-grid">
+            <div class="wide"><div class="eyebrow">SPF</div></div>
+            <label class="check"><input type="checkbox" name="spf_mx"> разрешить серверам из MX (<code>mx</code>)</label>
+            <label class="check"><input type="checkbox" name="spf_a"> разрешить A-записи домена (<code>a</code>)</label>
+            <label class="field"><span>Дополнительные IP/сети (через пробел)</span><input name="spf_ip4" placeholder="198.51.100.7 203.0.113.0/28"></label>
+            <label class="field"><span>Внешние сервисы (include, через пробел)</span><input name="spf_include" placeholder="_spf.yandex.net"></label>
+            <label class="field"><span>Остальным</span><select name="spf_all"><option value="-all">-all — отклонять (если других источников нет)</option><option value="~all">~all — помечать (на время проверки)</option></select></label>
+            <div class="wide"><div class="eyebrow">DMARC</div></div>
+            <label class="field"><span>Политика p</span><select name="dmarc_p">
+              <option value="none">none — только отчёты (старт)</option><option value="quarantine">quarantine — в спам</option><option value="reject">reject — отклонять</option></select></label>
+            <label class="field"><span>Для поддоменов sp</span><select name="dmarc_sp"><option value="">как у домена</option><option value="none">none</option><option value="quarantine">quarantine</option><option value="reject">reject</option></select></label>
+            <label class="field"><span>Доля писем pct, %</span><input name="dmarc_pct" type="number" min="1" max="100"></label>
+            <label class="field"><span>Отчёты о сбоях fo</span><select name="dmarc_fo"><option value="1">1 — при любой ошибке (рекомендуется)</option><option value="0">0 — только если всё не прошло</option><option value="d">d — ошибки DKIM</option><option value="s">s — ошибки SPF</option></select></label>
+            <label class="field"><span>Выравнивание DKIM adkim</span><select name="dmarc_adkim"><option value="r">r — мягкое (поддомены допустимы)</option><option value="s">s — строгое</option></select></label>
+            <label class="field"><span>Выравнивание SPF aspf</span><select name="dmarc_aspf"><option value="r">r — мягкое</option><option value="s">s — строгое</option></select></label>
+            <label class="check"><input type="checkbox" name="dmarc_rua"> сводные отчёты на dmarc@домен (rua)</label>
+            <label class="check"><input type="checkbox" name="dmarc_ruf"> отчёты о сбоях (ruf; многие не присылают)</label>
+            <div class="wide"><div class="eyebrow">Дополнительно</div></div>
+            <label class="check"><input type="checkbox" name="tlsrpt"> TLS-RPT: отчёты о проблемах TLS</label>
+            <label class="check"><input type="checkbox" name="srv"> SRV-записи для автонастройки почтовых программ</label>
+            <div class="wide actions" data-write><button class="primary-button" type="submit">Сохранить и пересобрать записи</button></div>
+          </form>
+        </div>
+        <div data-tabpage="props" class="hidden">
+          <form id="props-form" class="form-grid">
+            <label class="field"><span>Квота домена, МБ</span><input name="quota_mb" type="number" min="1"></label>
+            <label class="field"><span>Описание</span><input name="description" maxlength="200"></label>
+            <label class="field"><span>Статус</span><select name="status"><option value="active">активен — принимает почту</option><option value="disabled">отключён — почта отклоняется</option></select></label>
+            <div class="wide actions" data-write><button class="primary-button" type="submit">Сохранить</button>
+              <button class="danger-button" type="button" id="domain-delete" data-admin>Удалить домен</button></div>
+          </form>
+        </div>
+      </article>
+    </section>
 
-    <section id="section-domains" class="page-section hidden"><div class="section-intro"><div><div class="eyebrow">TENANT CONFIGURATION</div><h2>Домены</h2><p>Домены, которые обслуживает шлюз, и их суммарные квоты.</p></div><button class="primary-button" id="new-domain">+ Добавить домен</button></div><div class="panel"><div class="table-wrap"><table><thead><tr><th>Домен</th><th>Статус</th><th>Ящики</th><th>Квота</th><th></th></tr></thead><tbody id="domains-table"></tbody></table></div></div></section>
+    <!-- Ящики -->
+    <section data-page="mailboxes" class="hidden">
+      <div class="section-intro">
+        <div><h2>Почтовые ящики</h2><p>Логин в почтовой программе — полный адрес. Изменения действуют сразу: Postfix и Dovecot читают базу напрямую.</p></div>
+        <div class="actions"><input id="mailbox-filter" placeholder="Поиск адреса"><button class="primary-button" data-write id="new-mailbox">+ Ящик</button></div>
+      </div>
+      <article class="panel"><div class="table-wrap"><table>
+        <thead><tr><th>Адрес</th><th>Статус</th><th class="num">Занято</th><th class="num">Квота</th><th>Последний вход в веб-почту</th><th></th></tr></thead>
+        <tbody id="mailboxes-table"></tbody></table></div></article>
+    </section>
 
-    <section id="section-mailboxes" class="page-section hidden"><div class="section-intro"><div><div class="eyebrow">MAILBOXES & QUOTAS</div><h2>Почтовые ящики</h2><p>Адреса и квоты хранения. Пароли будут подключены через защищённое хранилище.</p></div><button class="primary-button" id="new-mailbox">+ Добавить ящик</button></div><div class="panel"><div class="table-wrap"><table><thead><tr><th>Адрес</th><th>Статус</th><th>Квота</th><th>Создан</th><th></th></tr></thead><tbody id="mailboxes-table"></tbody></table></div></div></section>
+    <!-- Алиасы -->
+    <section data-page="aliases" class="hidden">
+      <div class="section-intro">
+        <div><h2>Алиасы и пересылка</h2><p>Адрес без своего ящика, письма которого уходят одному или нескольким получателям. Получатели-ящики этого сервера могут отправлять письма от имени алиаса. Алиас <code>*</code> — «все остальные адреса домена» (catch-all, включайте осознанно: собирает спам).</p></div>
+        <button class="primary-button" data-write id="new-alias">+ Алиас</button>
+      </div>
+      <article class="panel"><div class="table-wrap"><table>
+        <thead><tr><th>Адрес</th><th>Получатели</th><th>Статус</th><th>Заметка</th><th></th></tr></thead>
+        <tbody id="aliases-table"></tbody></table></div></article>
+    </section>
 
-    <section id="section-config" class="page-section hidden"><div class="section-intro"><div><div class="eyebrow">POSTFIX RUNTIME</div><h2>Конфигурация</h2><p>Только чтение. Секретные значения скрываются до появления защищённого хранилища.</p></div></div><article class="panel"><div id="config-list" class="config-list"></div></article></section>
-    <section id="section-journal" class="page-section hidden"><div class="section-intro"><div><div class="eyebrow">AUDIT TRAIL</div><h2>Журнал действий</h2><p>Кто и что изменил в панели управления.</p></div></div><article class="panel"><div id="journal-list" class="event-list"></div></article></section>
-    <section id="section-logs" class="page-section hidden"><div class="section-intro"><div><div class="eyebrow">SYSTEM OBSERVABILITY</div><h2>Логи сервисов</h2><p>Последние записи systemd journal без изменения состояния системы.</p></div><select id="log-service" class="select"><option value="postfix">Postfix</option><option value="dovecot">Dovecot</option><option value="rspamd">Rspamd</option></select></div><article class="panel"><div class="terminal log-terminal" id="system-logs">Выберите сервис...</div></article></section>
-    <section id="section-security" class="page-section hidden"><div class="section-intro"><div><div class="eyebrow">ACCOUNT SECURITY</div><h2>Безопасность</h2><p>Защита административной панели от несанкционированного доступа.</p></div></div><article class="panel security-card"><div class="panel-head"><div><div class="eyebrow">TWO-FACTOR AUTHENTICATION</div><h3 id="security-status">Проверка...</h3></div><span class="route-icon">◇</span></div><p class="muted">TOTP-код из приложения-аутентификатора запрашивается вместе с паролем. При пяти ошибках вход блокируется на 15 минут.</p><button class="primary-button" id="setup-2fa">Настроить 2FA</button><button class="secondary-button" id="change-password">Изменить пароль</button><div class="security-output hidden" id="security-output"></div></article></section>
-    <section id="section-users" class="page-section hidden"><div class="section-intro"><div><div class="eyebrow">ACCESS CONTROL</div><h2>Пользователи</h2><p>Учётные записи операторов и администраторов панели.</p></div><button class="primary-button" id="new-user">+ Добавить пользователя</button></div><article class="panel"><div class="table-wrap"><table><thead><tr><th>Логин</th><th>Роль</th><th>2FA</th><th>Последний вход</th><th></th></tr></thead><tbody id="users-table"></tbody></table></div></article></section>
-    <section id="section-diagnostics" class="page-section hidden"><div class="section-intro"><div><div class="eyebrow">DELIVERY TOOLBOX</div><h2>Диагностика</h2><p>Проверка DNS почтового домена и доступности SMTP.</p></div></div><div class="diag-grid"><article class="panel"><h3>DNS домена</h3><p class="muted">A/AAAA, MX, SPF, DMARC и DKIM.</p><div class="diag-fields"><input id="dns-domain" placeholder="example.net"><input id="dns-selector" placeholder="DKIM selector" value="default"><button class="primary-button" id="run-dns">Проверить DNS</button></div><div id="dns-results" class="diag-results"></div></article><article class="panel"><h3>SMTP-проверка</h3><p class="muted">TCP, баннер и STARTTLS/SMTPS.</p><div class="diag-fields"><input id="smtp-host" placeholder="smtp.example.net"><select id="smtp-port"><option>25</option><option>587</option><option>465</option></select><button class="primary-button" id="run-smtp">Проверить SMTP</button></div><div id="smtp-results" class="diag-results"></div></article></div></section>
-    <section id="section-setup" class="page-section hidden"><div class="section-intro"><div><div class="eyebrow">AUTOMATED PROVISIONING</div><h2>Установка шлюза</h2><p>Профиль из статьи для Debian 13 и Ubuntu. Сначала выполните dry-run.</p></div><button class="primary-button" id="run-setup">Сформировать план</button></div><article class="panel"><div class="setup-warning">Автоматическое применение изменяет системные пакеты, hostname и службы. На этой машине обнаружен ALT Linux, поэтому применение будет заблокировано.</div><div id="setup-result" class="setup-result">План ещё не сформирован.</div></article></section>
-    <section id="section-settings" class="page-section hidden"><div class="section-intro"><div><div class="eyebrow">SERVER CONFIGURATION</div><h2>Настройки сервера</h2><p>Изменения сохраняются в PostgreSQL и проходят валидацию.</p></div><button class="primary-button" id="save-settings">Сохранить настройки</button></div><article class="panel settings-panel"><div class="settings-grid"><label>Hostname<input id="setting-hostname"></label><label>Почтовый домен<input id="setting-mail_domain"></label><label>Режим relay<select id="setting-relay_mode"><option value="internet">Internet delivery</option><option value="smarthost">External smarthost</option><option value="internal">Internal relay</option></select></label><label>SMTP listen<select id="setting-smtp_listen"><option value="loopback-only">Только localhost</option><option value="all">Все интерфейсы</option></select></label><label>TLS policy<select id="setting-tls_mode"><option value="may">STARTTLS optional</option><option value="encrypt">TLS required</option></select></label><label>Trusted networks<textarea id="setting-trusted_networks" rows="3"></textarea></label></div><div id="settings-message" class="settings-message hidden"></div></article></section>
-  <footer>Mailroom control plane · <span id="updated">данные ещё не загружены</span></footer>
+    <!-- Очередь -->
+    <section data-page="queue" class="hidden">
+      <div class="section-intro">
+        <div><h2>Очередь доставки</h2><p>Письма, которые Postfix ещё не доставил. Причина задержки — в колонке «Причина»; подробности — в «Трассировке» по ID.</p></div>
+        <div class="actions" data-write>
+          <button class="secondary-button" id="queue-flush">Повторить доставку всех</button>
+          <button class="secondary-button" data-queue="hold">Задержать</button>
+          <button class="secondary-button" data-queue="release">Освободить</button>
+          <button class="danger-button" data-queue="delete">Удалить выбранные</button>
+        </div>
+      </div>
+      <div class="metrics" id="queue-metrics"></div>
+      <article class="panel"><div class="table-wrap"><table>
+        <thead><tr><th><input type="checkbox" id="queue-all"></th><th>ID</th><th>Очередь</th><th>Отправитель</th><th>Получатели</th><th>Причина</th><th>Поступило</th></tr></thead>
+        <tbody id="queue-table"></tbody></table></div></article>
+    </section>
+
+    <!-- Трассировка -->
+    <section data-page="trace" class="hidden">
+      <div class="section-intro"><div><h2>Трассировка письма</h2><p>Путь письма по журналам Postfix, Rspamd и Dovecot: по адресу, ID очереди или Message-ID.</p></div></div>
+      <article class="panel">
+        <form class="inline-form" id="trace-form">
+          <input name="q" placeholder="user@example.com, 4ABC123DEF или <id@host>" required minlength="4">
+          <select name="hours"><option value="1">за 1 час</option><option value="24" selected>за сутки</option><option value="72">за 3 дня</option><option value="168">за неделю</option></select>
+          <button class="primary-button">Найти</button>
+        </form>
+        <p class="muted" id="trace-meta"></p>
+        <div class="terminal" id="trace-output">Введите запрос.</div>
+      </article>
+    </section>
+
+    <!-- Проверки -->
+    <section data-page="diagnostics" class="hidden">
+      <div class="section-intro"><div><h2>Проверки</h2><p>Инструменты для поиска причин недоставки и попадания в спам.</p></div></div>
+      <div class="grid-2">
+        <article class="panel"><h3>DNS почтового домена</h3><p class="muted">MX, A, SPF, DMARC, DKIM, MTA-STS, TLS-RPT и PTR серверов MX — любого домена.</p>
+          <form class="inline-form" id="dns-form"><input name="domain" placeholder="example.com" required><input name="selector" placeholder="DKIM-селектор"><button class="primary-button">Проверить</button></form>
+          <div id="dns-results"></div></article>
+        <article class="panel"><h3>SMTP-сервер</h3><p class="muted">Соединение, EHLO, STARTTLS и предлагаемые способы AUTH.</p>
+          <form class="inline-form" id="smtp-form"><input name="host" placeholder="mx.example.com" required><select name="port"><option>25</option><option>587</option><option>465</option></select><button class="primary-button">Проверить</button></form>
+          <div id="smtp-results"></div></article>
+        <article class="panel"><h3>Сертификат TLS</h3><p class="muted">Имя, издатель, срок и доверие к сертификату сервиса.</p>
+          <form class="inline-form" id="tls-form"><input name="host" placeholder="mail.example.com" required><select name="port"><option>993</option><option>465</option><option>587</option><option>25</option><option>995</option><option>443</option></select><button class="primary-button">Проверить</button></form>
+          <div id="tls-results"></div></article>
+        <article class="panel"><h3>Чёрные списки</h3><p class="muted">Spamhaus, SpamCop, Barracuda, PSBL. Пусто — будет проверен публичный IP из настроек.</p>
+          <form class="inline-form" id="dnsbl-form"><input name="ip" placeholder="IPv4"><button class="primary-button">Проверить</button></form>
+          <div id="dnsbl-results"></div></article>
+        <article class="panel"><h3>Тестовое письмо</h3><p class="muted">Отправьте себе на внешний ящик (Яндекс, Gmail, Mail.ru), откройте «Показать оригинал» и вставьте заголовки в разбор ниже.</p>
+          <form class="inline-form" id="sendtest-form" data-write><select name="from" id="sendtest-from"></select><input name="to" type="email" placeholder="you@gmail.com" required><button class="primary-button">Отправить</button></form>
+          <div id="sendtest-results"></div></article>
+        <article class="panel"><h3>Разбор заголовков</h3><p class="muted">SPF, DKIM, DMARC глазами получателя, путь по серверам с задержками, оценка спама.</p>
+          <form id="headers-form" class="form-grid"><textarea class="wide" name="headers" rows="6" placeholder="Вставьте заголовки письма целиком" required></textarea><div class="wide"><button class="primary-button">Разобрать</button></div></form>
+          <div id="headers-results"></div></article>
+      </div>
+    </section>
+
+    <!-- Логи -->
+    <section data-page="logs" class="hidden">
+      <div class="section-intro"><div><h2>Логи сервисов</h2><p>Последние 200 записей журнала systemd.</p></div>
+        <select id="log-service"><option value="postfix">Postfix</option><option value="dovecot">Dovecot</option><option value="rspamd">Rspamd</option><option value="fail2ban">Fail2ban</option><option value="mailroom">Mailroom</option></select></div>
+      <article class="panel"><div class="terminal" id="system-logs">Загрузка…</div></article>
+    </section>
+
+    <!-- Журнал -->
+    <section data-page="journal" class="hidden">
+      <div class="section-intro"><div><h2>Журнал действий</h2><p>Кто и что изменил в панели и веб-почте.</p></div></div>
+      <article class="panel"><div id="journal-list"></div></article>
+    </section>
+
+    <!-- Конфигурация -->
+    <section data-page="config" class="hidden">
+      <div class="section-intro"><div><h2>Конфигурация Postfix</h2><p>Вывод <code>postconf -n</code>: параметры, отличные от умолчаний. Только чтение.</p></div></div>
+      <article class="panel"><div class="table-wrap"><table><tbody id="config-list"></tbody></table></div></article>
+    </section>
+
+    <!-- Настройки -->
+    <section data-page="settings" class="hidden">
+      <div class="section-intro"><div><h2>Настройки сервера</h2><p>Имя и адрес используются в DNS-записях, проверках и подсказках пользователям.</p></div></div>
+      <article class="panel">
+        <form id="settings-form" class="form-grid">
+          <label class="field"><span>Имя почтового сервера (FQDN)</span><input name="hostname" required></label>
+          <label class="field"><span>Публичный IPv4 (внешний адрес, если сервер за NAT)</span><input name="public_ip"></label>
+          <label class="field"><span>Максимальный размер письма, МБ</span><input name="message_size_mb" type="number" min="1" max="100"></label>
+          <label class="field"><span>Доверенные сети без пароля (mynetworks)</span><input name="mynetworks"></label>
+          <label class="field"><span>Лимит веб-почты: получателей в час</span><input name="send_limit_hour" type="number" min="1"></label>
+          <label class="field"><span>Лимит веб-почты: получателей в письме</span><input name="send_limit_message" type="number" min="1"></label>
+          <p class="muted wide">В mynetworks добавляйте только сети, которым действительно разрешено отправлять письма без пароля (например, внутренний сервер приложений). Всё остальное — через 587 с авторизацией.</p>
+          <div class="wide actions" data-admin><button class="primary-button" type="submit">Сохранить</button>
+            <button class="secondary-button" type="button" id="settings-apply">Применить к Postfix</button></div>
+        </form>
+      </article>
+    </section>
+
+    <!-- Пользователи -->
+    <section data-page="users" class="hidden">
+      <div class="section-intro"><div><h2>Пользователи панели</h2><p>Администратор — всё; оператор — домены, ящики, алиасы, очередь; наблюдатель — только просмотр.</p></div>
+        <button class="primary-button" id="new-user" data-admin>+ Пользователь</button></div>
+      <article class="panel"><div class="table-wrap"><table>
+        <thead><tr><th>Логин</th><th>Роль</th><th>2FA</th><th>Последний вход</th><th></th></tr></thead>
+        <tbody id="users-table"></tbody></table></div></article>
+    </section>
+
+    <!-- Безопасность -->
+    <section data-page="security" class="hidden">
+      <div class="section-intro"><div><h2>Безопасность</h2><p>Ваша учётная запись в панели.</p></div></div>
+      <div class="grid-2">
+        <article class="panel"><div class="eyebrow">Двухфакторная аутентификация</div><h3 id="security-status">…</h3>
+          <p class="muted">Код из приложения (Google Authenticator, NetControl Key и др.) запрашивается после пароля.</p>
+          <div class="actions"><button class="primary-button" id="setup-2fa">Настроить 2FA</button><button class="secondary-button hidden" id="disable-2fa">Отключить</button></div>
+          <div id="totp-box" class="hidden">
+            <p class="muted">Добавьте секрет в приложение и введите код:</p>
+            <div class="copy-box"><code id="totp-secret"></code></div>
+            <p class="small muted" id="totp-uri"></p>
+            <form class="inline-form" id="totp-form"><input name="code" inputmode="numeric" placeholder="123456" required><button class="primary-button">Включить</button></form>
+          </div></article>
+        <article class="panel"><div class="eyebrow">Пароль</div><h3>Смена пароля</h3>
+          <form id="password-form" class="form-grid">
+            <label class="field wide"><span>Текущий пароль</span><input name="current_password" type="password" required autocomplete="current-password"></label>
+            <label class="field wide"><span>Новый пароль (от 14 символов)</span><input name="new_password" type="password" minlength="14" required autocomplete="new-password"></label>
+            <div class="wide"><button class="primary-button">Изменить пароль</button></div>
+          </form><p class="muted">После смены пароля другие сессии завершаются.</p></article>
+      </div>
+    </section>
   </main>
-  <dialog id="user-modal" class="modal"><form method="dialog" id="user-form"><div class="modal-head"><div><div class="eyebrow">ACCESS CONTROL</div><h3>Новый пользователь</h3></div><button class="modal-close" value="cancel">×</button></div><label>Логин<input name="username" required minlength="3" maxlength="32" pattern="[a-z0-9._-]+"></label><label>Пароль<input name="password" type="password" required minlength="14"></label><label>Роль<select name="role"><option value="operator">Оператор</option><option value="admin">Администратор</option><option value="viewer">Наблюдатель</option></select></label><div class="modal-actions"><button class="secondary-button" value="cancel">Отмена</button><button class="primary-button" value="default">Создать пользователя</button></div></form></dialog>
-  <dialog id="domain-modal" class="modal"><form method="dialog" id="domain-form"><div class="modal-head"><div><div class="eyebrow">TENANT CONFIGURATION</div><h3>Новый домен</h3></div><button class="modal-close" value="cancel">×</button></div><label>Почтовый домен<input name="name" placeholder="example.net" required></label><label>Квота домена, МБ<input name="quota_mb" type="number" value="10240" min="1" required></label><div class="modal-actions"><button class="secondary-button" value="cancel">Отмена</button><button class="primary-button" value="default">Добавить домен</button></div></form></dialog>
-  <dialog id="mailbox-modal" class="modal"><form method="dialog" id="mailbox-form"><div class="modal-head"><div><div class="eyebrow">MAILBOXES & QUOTAS</div><h3>Новый ящик</h3></div><button class="modal-close" value="cancel">×</button></div><label>Локальная часть<input name="localpart" placeholder="user" required></label><label>Домен<select name="domain_id" id="mailbox-domain" required></select></label><label>Квота ящика, МБ<input name="quota_mb" type="number" value="2048" min="1" required></label><div class="modal-actions"><button class="secondary-button" value="cancel">Отмена</button><button class="primary-button" value="default">Добавить ящик</button></div></form></dialog>
-  <dialog id="secret-modal" class="modal"><form method="dialog"><div class="modal-head"><div><div class="eyebrow">ONE-TIME SECRET</div><h3>Пароль создан</h3></div><button class="modal-close" value="default">×</button></div><p class="muted">Скопируйте пароль сейчас. Повторно показать его невозможно.</p><div class="one-time-secret" id="one-time-secret"></div><div class="modal-actions"><button class="primary-button" value="default">Готово</button></div></form></dialog>
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</div>
+
+<div id="toast" class="notice hidden" role="status"></div>
+
+<dialog class="modal" id="form-modal">
+  <form id="modal-form" method="dialog">
+    <div class="modal-head"><div><div class="eyebrow" id="modal-eyebrow"></div><h3 id="modal-title"></h3></div><button class="modal-close" value="cancel" formnovalidate>×</button></div>
+    <div id="modal-fields" class="form-grid"></div>
+    <div id="modal-error" class="form-error hidden"></div>
+    <div class="modal-actions"><button class="secondary-button" value="cancel" formnovalidate>Отмена</button><button class="primary-button" id="modal-submit" value="ok">Сохранить</button></div>
+  </form>
+</dialog>
+
+<dialog class="modal" id="secret-modal">
+  <div class="modal-body">
+    <div class="modal-head"><div><div class="eyebrow">Одноразово</div><h3 id="secret-title">Пароль</h3></div></div>
+    <p class="muted" id="secret-text">Скопируйте пароль сейчас: повторно его показать нельзя.</p>
+    <div class="one-time-secret" id="secret-value"></div>
+    <div class="modal-actions"><button class="secondary-button" id="secret-copy">Копировать</button><button class="primary-button" id="secret-close">Готово</button></div>
+  </div>
+</dialog>
+
+<script src="{{ url_for('static', filename='admin.js') }}"></script>
 </body>
 </html>

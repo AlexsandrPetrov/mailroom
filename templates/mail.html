@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Почта</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='mail.css') }}">
+</head>
+<body class="view-list">
+<div class="app">
+  <header class="topbar">
+    <button class="icon back" id="back" aria-label="Назад">←</button>
+    <div class="brand"><span class="brand-mark">M</span><span>Почта</span></div>
+    <form class="search" id="search-form" role="search">
+      <input id="search" type="search" placeholder="Поиск в папке  ( / )" aria-label="Поиск">
+      <select id="search-field" aria-label="Где искать">
+        <option value="all">везде</option><option value="from">от кого</option><option value="to">кому</option>
+        <option value="subject">тема</option><option value="body">текст</option>
+      </select>
+    </form>
+    <span class="who" id="who"></span>
+    <button class="icon" id="open-settings" title="Настройки">⚙</button>
+    <button class="icon" id="logout" title="Выйти">⎋</button>
+  </header>
+
+  <div class="main">
+    <aside class="folders" id="folders-pane">
+      <button class="btn primary compose" id="compose-btn">✎ Написать</button>
+      <div id="folder-list"></div>
+      <div class="folders-foot">
+        <button class="btn small" id="folder-new">+ Папка</button>
+        <div id="quota" class="small muted"></div>
+      </div>
+    </aside>
+
+    <section class="list-pane">
+      <div class="list-title" id="list-title">Входящие</div>
+      <div class="list-toolbar">
+        <input type="checkbox" id="select-all" title="Выбрать все" aria-label="Выбрать все">
+        <button class="icon" data-bulk="read" title="Прочитано">✉</button>
+        <button class="icon" data-bulk="unread" title="Не прочитано">●</button>
+        <button class="icon" data-bulk="flag" title="Важное">★</button>
+        <button class="icon" data-bulk="spam" title="В спам" id="bulk-spam">⛔</button>
+        <button class="icon" data-bulk="delete" title="Удалить">🗑</button>
+        <select id="bulk-move" aria-label="Переместить"><option value="">Переместить…</option></select>
+        <span class="grow"></span>
+        <label class="check small"><input type="checkbox" id="filter-unseen"> непрочит.</label>
+        <label class="check small"><input type="checkbox" id="filter-flagged"> важные</label>
+        <button class="icon" id="refresh" title="Обновить">↻</button>
+      </div>
+      <div class="list-toolbar hidden" id="folder-tools">
+        <button class="btn small" id="folder-empty">Очистить папку</button>
+        <button class="btn small" id="folder-rename">Переименовать</button>
+        <button class="btn small danger" id="folder-delete">Удалить папку</button>
+      </div>
+      <div class="messages" id="messages"><div class="empty">Загрузка…</div></div>
+      <div class="pager"><button class="btn" id="prev">←</button><span id="page-info"></span><button class="btn" id="next">→</button></div>
+    </section>
+
+    <section class="reader" id="reader">
+      <div class="reader-placeholder" id="reader-empty">Выберите письмо</div>
+      <div class="hidden reader-view" id="reader-view"></div>
+    </section>
+  </div>
+</div>
+
+<dialog id="compose-dlg">
+  <form class="dlg compose" id="compose-form" method="dialog">
+    <div class="dlg-head"><h2 id="compose-title">Новое письмо</h2><button class="icon" value="cancel" formnovalidate aria-label="Закрыть">×</button></div>
+    <div class="dlg-body">
+      <div class="compose-row"><span>Кому</span><input name="to" autocomplete="off" data-suggest></div>
+      <div class="compose-row"><span>Копия</span><input name="cc" autocomplete="off" data-suggest></div>
+      <div class="compose-row hidden" id="bcc-row"><span>Скрытая</span><input name="bcc" autocomplete="off" data-suggest></div>
+      <div class="compose-row"><span>Тема</span><input name="subject" maxlength="300"></div>
+      <textarea name="body" aria-label="Текст письма"></textarea>
+      <div class="chips" id="compose-files"></div>
+      <div class="error hidden" id="compose-error"></div>
+    </div>
+    <div class="dlg-foot">
+      <label class="btn">📎 Вложить<input type="file" id="compose-attach" multiple hidden></label>
+      <button class="btn" type="button" id="show-bcc">Скрытая копия</button>
+      <span class="grow small muted" id="compose-status"></span>
+      <button class="btn" type="button" id="compose-draft">В черновики</button>
+      <button class="btn primary" type="submit" id="compose-send">Отправить</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settings-dlg">
+  <div class="dlg">
+    <div class="dlg-head"><h2>Настройки</h2><button class="icon" id="settings-close" aria-label="Закрыть">×</button></div>
+    <div class="tabs" id="settings-tabs">
+      <button class="tab active" data-tab="profile">Профиль</button>
+      <button class="tab" data-tab="vacation">Автоответ</button>
+      <button class="tab" data-tab="forward">Переадресация</button>
+      <button class="tab" data-tab="filters">Фильтры</button>
+      <button class="tab" data-tab="contacts">Контакты</button>
+      <button class="tab" data-tab="password">Пароль</button>
+      <button class="tab" data-tab="connect">Подключение</button>
+    </div>
+    <form class="dlg-body" id="settings-form">
+      <div data-tabpage="profile" class="grid2">
+        <label class="field">Имя отправителя<input name="display_name" maxlength="100"></label>
+        <div></div>
+        <label class="field span2">Подпись (добавляется в новые письма)<textarea name="signature" rows="4" maxlength="2000"></textarea></label>
+      </div>
+      <div data-tabpage="vacation" class="hidden stack">
+        <label class="check"><input type="checkbox" name="vac_enabled"> Отвечать автоматически</label>
+        <div class="grid2">
+          <label class="field">С даты (необязательно)<input type="date" name="vac_start"></label>
+          <label class="field">По дату (включительно)<input type="date" name="vac_end"></label>
+          <label class="field">Тема ответа<input name="vac_subject" maxlength="200" placeholder="Автоответ: в отпуске"></label>
+          <label class="field">Не чаще одного ответа адресату раз в, дней<input type="number" name="vac_days" min="1" max="30"></label>
+        </div>
+        <label class="field">Текст<textarea name="vac_text" rows="5" maxlength="5000"></textarea></label>
+        <p class="small muted">Рассылкам и письмам, помеченным как спам, автоответ не отправляется.</p>
+      </div>
+      <div data-tabpage="forward" class="hidden stack">
+        <label class="check"><input type="checkbox" name="fwd_enabled"> Пересылать входящие письма</label>
+        <label class="field">На адрес<input type="email" name="fwd_address" placeholder="name@example.org"></label>
+        <label class="check"><input type="checkbox" name="fwd_keep"> Оставлять копию в этом ящике</label>
+        <p class="small muted">Пересылка на внешние ящики может не проходить проверку SPF у получателя; подпись DKIM при этом сохраняется.</p>
+      </div>
+      <div data-tabpage="filters" class="hidden stack">
+        <p class="small muted">Правила применяются к входящим письмам по порядку. Спам попадает в «Спам» до фильтров.</p>
+        <div id="filter-list" class="stack"></div>
+        <div><button class="btn" type="button" id="filter-add">+ Правило</button></div>
+      </div>
+      <div data-tabpage="contacts" class="hidden stack">
+        <div class="grid2"><input id="contact-email" type="email" placeholder="адрес"><input id="contact-name" placeholder="имя"></div>
+        <div><button class="btn" type="button" id="contact-add">Добавить контакт</button></div>
+        <div id="contact-list"></div>
+      </div>
+      <div data-tabpage="password" class="hidden stack">
+        <label class="field">Текущий пароль<input type="password" name="current_password" autocomplete="current-password"></label>
+        <label class="field">Новый пароль (от 12 символов)<input type="password" name="new_password" autocomplete="new-password" minlength="12"></label>
+        <div><button class="btn primary" type="button" id="password-save">Сменить пароль</button></div>
+        <p class="small muted">Новый пароль сразу действует в почтовых программах. Другие сеансы веб-почты будут завершены.</p>
+        <div id="session-list" class="small"></div>
+      </div>
+      <div data-tabpage="connect" class="hidden" id="connect-info"></div>
+      <div class="error hidden" id="settings-error"></div>
+    </form>
+    <div class="dlg-foot" id="settings-foot"><button class="btn" id="settings-cancel" type="button">Закрыть</button><button class="btn primary" id="settings-save" type="button">Сохранить</button></div>
+  </div>
+</dialog>
+
+<div id="toast" class="hidden" role="status"></div>
+<script src="{{ url_for('static', filename='mail.js') }}"></script>
+</body>
+</html>
