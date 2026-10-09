@@ -477,7 +477,8 @@ def compose_source():
         msg = box.fetch(uid)
     subject = str(msg.get("Subject") or "")
     sender = mailcore.address_list(msg.get("Reply-To")) or mailcore.address_list(msg.get("From"))
-    fmt = lambda lst: ", ".join(formataddr((a["name"], a["email"])) if a["name"] else a["email"] for a in lst)
+    # Для поля ввода — читаемые имена, без кодирования RFC 2047 (его сделает отправка).
+    fmt = lambda lst: ", ".join(f'"{a["name"].replace(chr(34), "")}" <{a["email"]}>' if a["name"] else a["email"] for a in lst)
     result = {"mode": mode, "to": "", "cc": "", "subject": subject, "body": "", "attachments": [],
               "in_reply_to": "", "references": "", "source": {"folder": folder, "uid": uid}}
     if mode == "draft":

@@ -1142,7 +1142,15 @@ def check_record(rec: dict, row: dict, settings: dict) -> dict:
             elif {k: v.lower() for k, v in tags.items()} == {k: v.lower() for k, v in mailcore.parse_tags(want).items()}:
                 result["status"] = "ok"
             else:
-                result.update(status="warn", note=f"Опубликована политика p={tags.get('p')}, отличается от рекомендуемой")
+                want_tags = mailcore.parse_tags(want)
+                missing = [k for k in want_tags if k not in tags]
+                differs = [k for k in want_tags if k in tags and tags[k].lower() != want_tags[k].lower() and k != "v"]
+                parts = []
+                if missing:
+                    parts.append("не хватает тегов: " + ", ".join(missing))
+                if differs:
+                    parts.append("отличаются: " + ", ".join(f"{k}={tags[k]} (рекомендуется {want_tags[k]})" for k in differs))
+                result.update(status="warn", note="DMARC опубликован, но " + "; ".join(parts))
     else:
         norm = lambda s: s.replace(" ", "").rstrip(".").lower()
         ok = any(norm(f) == norm(want) for f in found)

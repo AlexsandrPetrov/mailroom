@@ -45,7 +45,8 @@ getent passwd vmail >/dev/null || useradd --system --uid 5000 --gid vmail --home
 install -d -o vmail -g vmail -m 0750 /var/vmail
 getent passwd mailroom >/dev/null || useradd --system --home-dir $APP --shell /usr/sbin/nologin mailroom
 usermod -aG systemd-journal mailroom
-install -d -o mailroom -g mailroom -m 0750 $DATA
+# 0711: Rspamd (_rspamd) должен пройти к $DATA/dkim, но не видеть список файлов.
+install -d -o mailroom -g mailroom -m 0711 $DATA
 install -d -o mailroom -g _rspamd -m 2750 $DATA/dkim
 install -d -m 0755 $ETC
 install -d -m 0750 -o root -g mailroom $ETC/tls
