@@ -51,15 +51,21 @@ install -d -m 0755 $ETC
 install -d -m 0750 -o root -g mailroom $ETC/tls
 
 echo '== Сертификат (собственный CA для внутренней сети)'
+# Строгие клиенты (Python 3.13, современные браузеры) требуют у CA keyUsage=keyCertSign.
+if [[ -f $ETC/ca/ca.crt ]] && ! openssl x509 -in $ETC/ca/ca.crt -noout -ext keyUsage 2>/dev/null | grep -q 'Certificate Sign'; then
+  mv $ETC/ca "$BACKUP/ca-old"; rm -f $ETC/tls/server.crt
+fi
 if [[ ! -f $ETC/ca/ca.key ]]; then
   install -d -m 0700 $ETC/ca
   openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj "/CN=Mailroom CA $HOSTNAME_FQDN" \
-    -keyout $ETC/ca/ca.key -out $ETC/ca/ca.crt 2>/dev/null
+    -addext 'basicConstraints=critical,CA:TRUE,pathlen:0' -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+    -addext 'subjectKeyIdentifier=hash' -keyout $ETC/ca/ca.key -out $ETC/ca/ca.crt 2>/dev/null
 fi
 if [[ ! -f $ETC/tls/server.crt ]] || ! openssl x509 -in $ETC/tls/server.crt -noout -checkend 2592000 >/dev/null \
    || ! openssl x509 -in $ETC/tls/server.crt -noout -ext subjectAltName | grep -q "DNS:$HOSTNAME_FQDN"; then
   openssl req -newkey rsa:2048 -nodes -subj "/CN=$HOSTNAME_FQDN" -keyout $ETC/tls/server.key -out $ETC/tls/server.csr 2>/dev/null
-  printf 'subjectAltName=DNS:%s,DNS:%s,IP:%s\nextendedKeyUsage=serverAuth\n' "$HOSTNAME_FQDN" "$(hostname -f)" "$LAN_IP" > $ETC/tls/ext.cnf
+  printf 'subjectAltName=DNS:%s,DNS:%s,IP:%s\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n' \
+    "$HOSTNAME_FQDN" "$(hostname -f)" "$LAN_IP" > $ETC/tls/ext.cnf
   openssl x509 -req -in $ETC/tls/server.csr -CA $ETC/ca/ca.crt -CAkey $ETC/ca/ca.key -CAcreateserial \
     -days 825 -extfile $ETC/tls/ext.cnf -out $ETC/tls/server.crt 2>/dev/null
   cat $ETC/tls/server.crt $ETC/ca/ca.crt > $ETC/tls/fullchain.pem
