@@ -431,7 +431,35 @@ EOF
 fail2ban-client -t >/dev/null
 
 echo '== Перезапуск сервисов'
-systemctl enable -q --now redis-server
+systemctl enable -q redis-server
+if ! systemctl restart redis-server; then
+  # Непривилегированный LXC: sandbox пространств имён systemd недоступен (status=226/NAMESPACE).
+  if journalctl -u redis-server -n 20 --no-pager | grep -q 'NAMESPACE'; then
+    install -d /etc/systemd/system/redis-server.service.d
+    cat > /etc/systemd/system/redis-server.service.d/lxc.conf <<'EOF'
+[Service]
+PrivateTmp=no
+PrivateDevices=no
+ProtectHome=no
+ProtectSystem=no
+ProtectKernelTunables=no
+ProtectKernelModules=no
+ProtectControlGroups=no
+ProtectHostname=no
+ProtectClock=no
+ProtectKernelLogs=no
+PrivateUsers=no
+RestrictNamespaces=no
+ReadWritePaths=
+ReadOnlyPaths=
+EOF
+    systemctl daemon-reload
+    systemctl reset-failed redis-server
+    systemctl restart redis-server
+  else
+    false
+  fi
+fi
 systemctl restart rspamd dovecot
 systemctl restart postfix
 systemctl enable -q fail2ban; systemctl restart fail2ban
