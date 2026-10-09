@@ -27,6 +27,41 @@ BACKUP=/root/mailroom-backup-$(date +%Y%m%d-%H%M%S)
 [[ $HOSTNAME_FQDN =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]] || { echo "Некорректное имя: $HOSTNAME_FQDN" >&2; exit 1; }
 echo "== Mailroom: $HOSTNAME_FQDN ($LAN_IP), порт $PORT"
 
+# Непривилегированный LXC: sandbox пространств имён systemd недоступен (status=226/NAMESPACE).
+# Для такого сервиса подкладываем drop-in без изоляции — только если он иначе не стартует.
+start_with_lxc_fallback() {
+  local unit=$1
+  systemctl enable -q "$unit"
+  systemctl reset-failed "$unit" 2>/dev/null || true
+  systemctl restart "$unit" && return 0
+  journalctl -u "$unit" -n 30 --no-pager | grep -q NAMESPACE || return 1
+  install -d "/etc/systemd/system/$unit.service.d"
+  cat > "/etc/systemd/system/$unit.service.d/lxc.conf" <<'EOF'
+[Service]
+PrivateTmp=no
+PrivateDevices=no
+ProtectHome=no
+ProtectSystem=no
+ProtectKernelTunables=no
+ProtectKernelModules=no
+ProtectControlGroups=no
+ProtectHostname=no
+ProtectClock=no
+ProtectKernelLogs=no
+PrivateUsers=no
+RestrictNamespaces=no
+ProtectProc=default
+ProcSubset=all
+ReadWritePaths=
+ReadOnlyPaths=
+NoExecPaths=
+ExecPaths=
+EOF
+  systemctl daemon-reload
+  systemctl reset-failed "$unit"
+  systemctl restart "$unit"
+}
+
 echo '== Пакеты'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -546,40 +581,6 @@ EOF
 fail2ban-client -t >/dev/null
 
 echo '== Перезапуск сервисов'
-# Непривилегированный LXC: sandbox пространств имён systemd недоступен (status=226/NAMESPACE).
-# Для такого сервиса подкладываем drop-in без изоляции — только если он иначе не стартует.
-start_with_lxc_fallback() {
-  local unit=$1
-  systemctl enable -q "$unit"
-  systemctl reset-failed "$unit" 2>/dev/null || true
-  systemctl restart "$unit" && return 0
-  journalctl -u "$unit" -n 30 --no-pager | grep -q NAMESPACE || return 1
-  install -d "/etc/systemd/system/$unit.service.d"
-  cat > "/etc/systemd/system/$unit.service.d/lxc.conf" <<'EOF'
-[Service]
-PrivateTmp=no
-PrivateDevices=no
-ProtectHome=no
-ProtectSystem=no
-ProtectKernelTunables=no
-ProtectKernelModules=no
-ProtectControlGroups=no
-ProtectHostname=no
-ProtectClock=no
-ProtectKernelLogs=no
-PrivateUsers=no
-RestrictNamespaces=no
-ProtectProc=default
-ProcSubset=all
-ReadWritePaths=
-ReadOnlyPaths=
-NoExecPaths=
-ExecPaths=
-EOF
-  systemctl daemon-reload
-  systemctl reset-failed "$unit"
-  systemctl restart "$unit"
-}
 start_with_lxc_fallback redis-server
 systemctl restart rspamd dovecot
 systemctl restart postfix
