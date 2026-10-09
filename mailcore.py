@@ -670,6 +670,18 @@ def analyze_headers(text: str) -> dict:
     }
 
 
+def rspamd_learn(kind: str, raw: bytes) -> bool:
+    """Обучить байесовский фильтр Rspamd: kind = spam | ham. Контроллер доверяет 127.0.0.1."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:11334/learn{kind}", data=raw, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status in (200, 204, 208)
+    except OSError as exc:
+        # 208 — уже обучено на этом письме; urllib считает его ошибкой только при 4xx/5xx
+        return getattr(exc, "code", 0) == 208
+
+
 def postqueue_json() -> list[dict]:
     ok, out = run(["postqueue", "-j"], timeout=10)
     if not ok:

@@ -15,6 +15,7 @@ import os
 import re
 import secrets
 import smtplib
+import threading
 import time
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, getaddresses, make_msgid
@@ -434,10 +435,12 @@ def message_action():
                 box.expunge(uids)
             else:
                 box.move(uids, trash)
-        elif action == "spam":
-            box.move(uids, special.get("Junk", "Junk"))
-        elif action == "notspam":
-            box.move(uids, "INBOX")
+        elif action in ("spam", "notspam"):
+            # Письма сначала читаем, затем перемещаем и обучаем Rspamd в фоне.
+            raws = [box.fetch_raw(u) for u in uids[:50]]
+            box.move(uids, special.get("Junk", "Junk") if action == "spam" else "INBOX")
+            kind = "spam" if action == "spam" else "ham"
+            threading.Thread(target=lambda: [mailcore.rspamd_learn(kind, r) for r in raws], daemon=True).start()
         elif action == "move":
             target = str(data.get("target", ""))
             if not mailcore.valid_folder_name(target) or target == folder:

@@ -14,6 +14,7 @@ const TITLES = {
   overview: 'Обзор', recommendations: 'Рекомендации', domains: 'Домены и DNS', mailboxes: 'Почтовые ящики',
   aliases: 'Алиасы', queue: 'Очередь', trace: 'Трассировка', diagnostics: 'Проверки', logs: 'Логи',
   journal: 'Журнал действий', config: 'Конфигурация Postfix', settings: 'Настройки', users: 'Пользователи',
+  activity: 'Активность', backups: 'Резервные копии',
   security: 'Безопасность',
 };
 const LEVEL = {ok: 'норма', warn: 'внимание', fail: 'ошибка', info: 'совет', skip: 'пропуск'};
@@ -620,7 +621,8 @@ loaders.config = async () => {
 loaders.settings = async () => {
   const s = (await api('/api/settings')).items;
   const f = $('#settings-form');
-  for (const key of ['hostname', 'public_ip', 'message_size_mb', 'mynetworks', 'send_limit_hour', 'send_limit_message']) f[key].value = s[key] ?? '';
+  for (const key of ['hostname', 'public_ip', 'message_size_mb', 'mynetworks', 'send_limit_hour', 'send_limit_message',
+    'smtp_limit_hour', 'alert_email', 'telegram_token', 'telegram_chat']) f[key].value = s[key] ?? '';
   $$('input', f).forEach((i) => { i.disabled = me.role !== 'admin'; });
 };
 $('#settings-form').addEventListener('submit', async (e) => {
@@ -636,6 +638,64 @@ $('#settings-apply').addEventListener('click', async () => {
     toast(`Применено: ${r.output}`);
   } catch (e) { fail(e); }
 });
+
+$('#alerts-test').addEventListener('click', async () => {
+  try {
+    const r = await post('/api/alerts/test');
+    toast(`Отправлено: ${r.results.join('; ')}`, r.results.some((x) => /ошибка/.test(x)) ? 'warn' : 'ok');
+  } catch (e) { fail(e); }
+});
+
+// ---------- активность ----------
+loaders.activity = async () => {
+  const d = await api(`/api/activity?hours=${$('#activity-hours').value}`);
+  const boxes = Object.entries(d.mailboxes).sort((a, b) => (b[1].sent - a[1].sent) || (b[1].logins - a[1].logins));
+  const sent = boxes.reduce((s, [, v]) => s + v.sent, 0);
+  const fails = d.failed_ips.reduce((s, x) => s + x.count, 0);
+  $('#activity-metrics').innerHTML = [['Отправлено писем', sent], ['Входов в ящики', boxes.reduce((s, [, v]) => s + v.logins, 0)],
+    ['Ошибок пароля', fails], ['Отклонено лимитом', d.ratelimited]]
+    .map(([l, v]) => `<div class="metric"><div class="metric-label">${l}</div><div class="metric-value">${esc(v)}</div></div>`).join('');
+  const ips = (list) => list.map((ip) => `<code>${esc(ip)}</code>`).join('<br>') || '—';
+  $('#activity-table').innerHTML = boxes.length ? boxes.map(([user, v]) => `<tr><td><b>${esc(user)}</b></td>
+      <td class="num">${v.sent}</td><td class="num">${v.sent_hour ? pill(v.sent_hour > 50 ? 'warn' : 'info', v.sent_hour) : '0'}</td>
+      <td class="small">${ips(v.send_ips)}</td><td class="num">${v.logins}</td><td class="small">${ips(v.login_ips)}</td>
+      <td>${fmtDate(v.last_login)}</td><td class="num">${v.failures ? pill('warn', v.failures) : '0'}</td></tr>`).join('')
+    : emptyRow(8, 'За этот период почтовые программы не входили и не отправляли');
+  $('#activity-fails').innerHTML = d.failed_ips.length ? d.failed_ips.map((x) => `<tr><td><code>${esc(x.ip)}</code></td><td class="num">${x.count}</td></tr>`).join('')
+    : emptyRow(2, 'Неудачных входов нет');
+  if (!d.journal_ok) toast('Журнал недоступен: пользователь mailroom должен быть в группе systemd-journal', 'warn');
+};
+$('#activity-hours').addEventListener('change', () => loaders.activity().catch(fail));
+
+// ---------- резервные копии ----------
+let backupPoll = null;
+loaders.backups = async () => {
+  const d = await api('/api/backups');
+  const s = d.status;
+  $('#backup-metrics').innerHTML = [
+    ['Последняя копия', s ? fmtDate(s.finished_at) : 'не было', s ? (s.ok ? 'успешно' : 'ошибка') : ''],
+    ['Размер', s && s.ok ? fmtBytes(s.size) : '—', s && s.seconds ? `${s.seconds} с` : ''],
+    ['Удалённая копия', d.remote ? (s && /^отправлено/.test(s.remote || '') ? 'есть' : 'нет') : 'не настроена', ''],
+    ['Сейчас', d.running ? 'копируется…' : 'ожидание', ''],
+  ].map(([l, v, sm]) => `<div class="metric"><div class="metric-label">${l}</div><div class="metric-value">${esc(v)}<small>${esc(sm)}</small></div></div>`).join('');
+  if (s && !s.ok) toast(`Последнее копирование: ${s.error}`, 'fail');
+  if (s && s.remote && !/^отправлено/.test(s.remote)) toast(`Удалённая копия: ${s.remote}`, 'warn');
+  $('#backup-table').innerHTML = d.items.length ? d.items.map((x) => `<tr><td><code>${esc(x.name)}</code></td><td class="num">${fmtBytes(x.size)}</td><td>${fmtDate(x.mtime)}</td></tr>`).join('')
+    : emptyRow(3, d.error ? d.error : 'Копий пока нет');
+  const f = $('#backup-form');
+  f.backup_keep.value = d.keep; f.backup_remote.value = d.remote; f.backup_remote_port.value = d.remote_port;
+  $('#backup-pubkey').textContent = d.pubkey || 'ключ ещё не создан — запустите deploy/install.sh';
+  clearTimeout(backupPoll);
+  if (d.running) backupPoll = setTimeout(() => { if (location.hash === '#backups') loaders.backups().catch(fail); }, 4000);
+};
+$('#backup-run').addEventListener('click', async () => {
+  try { await post('/api/backups/run'); toast('Копирование запущено'); setTimeout(() => loaders.backups().catch(fail), 1500); } catch (e) { fail(e); }
+});
+$('#backup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try { await api('/api/settings', {method: 'PUT', body: Object.fromEntries(new FormData(e.target))}); toast('Сохранено'); } catch (err) { fail(err); }
+});
+$('#backup-pubkey-copy').addEventListener('click', () => copyText($('#backup-pubkey').textContent));
 
 // ---------- пользователи ----------
 loaders.users = async () => {

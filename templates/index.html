@@ -23,8 +23,10 @@
       <button class="nav-item" data-section="queue"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-send"></use></svg></span>Очередь</button>
       <button class="nav-item" data-section="trace"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-search"></use></svg></span>Трассировка</button>
       <button class="nav-item" data-section="diagnostics"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-activity"></use></svg></span>Проверки</button>
+      <button class="nav-item" data-section="activity"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-eye"></use></svg></span>Активность</button>
       <button class="nav-item" data-section="logs"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-terminal"></use></svg></span>Логи</button>
       <div class="nav-group">Система</div>
+      <button class="nav-item" data-section="backups"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-archive"></use></svg></span>Резервные копии</button>
       <button class="nav-item" data-section="journal"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-list"></use></svg></span>Журнал действий</button>
       <button class="nav-item" data-section="config"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-file"></use></svg></span>Конфигурация Postfix</button>
       <button class="nav-item" data-section="settings"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-sliders"></use></svg></span>Настройки</button>
@@ -238,6 +240,45 @@
       </div>
     </section>
 
+
+    <!-- Активность -->
+    <section data-page="activity" class="hidden">
+      <div class="section-intro">
+        <div><h2>Активность ящиков</h2><p>Кто входил по IMAP/POP3 и с каких адресов, кто сколько отправил через 587/465, ошибки паролей. Резкий рост отправки или входы с незнакомых адресов — признак украденного пароля.</p></div>
+        <select id="activity-hours"><option value="1">за час</option><option value="24" selected>за сутки</option><option value="168">за неделю</option></select>
+      </div>
+      <div class="metrics" id="activity-metrics"></div>
+      <article class="panel"><h3>По ящикам</h3><div class="table-wrap"><table>
+        <thead><tr><th>Ящик</th><th class="num">Отправлено</th><th class="num">За час</th><th>Отправка с адресов</th><th class="num">Входы</th><th>Входы с адресов</th><th>Последний вход</th><th class="num">Ошибки</th></tr></thead>
+        <tbody id="activity-table"></tbody></table></div>
+        <p class="muted">Входы веб-почты здесь не показаны — они в «Журнале действий». Отправка из веб-почты ограничена отдельно.</p></article>
+      <article class="panel"><h3>Неудачные входы по адресам</h3><div class="table-wrap"><table>
+        <thead><tr><th>IP</th><th class="num">Ошибок</th></tr></thead><tbody id="activity-fails"></tbody></table></div></article>
+    </section>
+
+    <!-- Резервные копии -->
+    <section data-page="backups" class="hidden">
+      <div class="section-intro">
+        <div><h2>Резервные копии</h2><p>Каждую ночь в 03:30: база, письма, ключи DKIM, сертификаты и конфигурация. Архив зашифрован (AES256).</p></div>
+        <button class="primary-button" id="backup-run" data-admin>Создать копию сейчас</button>
+      </div>
+      <div class="metrics" id="backup-metrics"></div>
+      <article class="panel"><h3>Копии на этом сервере</h3><div class="table-wrap"><table>
+        <thead><tr><th>Файл</th><th class="num">Размер</th><th>Создана</th></tr></thead><tbody id="backup-table"></tbody></table></div></article>
+      <article class="panel">
+        <h3>Хранение и удалённая копия</h3>
+        <form id="backup-form" class="form-grid">
+          <label class="field"><span>Хранить последних копий</span><input name="backup_keep" type="number" min="1" max="365"></label>
+          <div></div>
+          <label class="field"><span>Удалённое хранилище (scp), пусто — не отправлять</span><input name="backup_remote" placeholder="backup@192.168.2.10:/srv/backup/mail"></label>
+          <label class="field"><span>Порт SSH</span><input name="backup_remote_port" type="number" min="1" max="65535"></label>
+          <div class="wide actions" data-admin><button class="primary-button">Сохранить</button></div>
+        </form>
+        <p class="muted">Добавьте этот ключ в <code>~/.ssh/authorized_keys</code> пользователя на сервере хранения (лучше с ограничением, например <code>restrict</code>):</p>
+        <div class="copy-box"><code id="backup-pubkey"></code><button class="link-button" id="backup-pubkey-copy">копировать</button></div>
+        <div class="notice warn spaced">Пароль шифрования лежит в <code>/etc/mailroom/backup.pass</code>. Сохраните его в менеджере паролей отдельно от сервера: без него копию не расшифровать. Восстановление — на сервере командой <code>sudo mailroom restore ФАЙЛ</code>.</div>
+      </article>
+    </section>
     <!-- Логи -->
     <section data-page="logs" class="hidden">
       <div class="section-intro"><div><h2>Логи сервисов</h2><p>Последние 200 записей журнала systemd.</p></div>
@@ -268,9 +309,16 @@
           <label class="field"><span>Доверенные сети без пароля (mynetworks)</span><input name="mynetworks"></label>
           <label class="field"><span>Лимит веб-почты: получателей в час</span><input name="send_limit_hour" type="number" min="1"></label>
           <label class="field"><span>Лимит веб-почты: получателей в письме</span><input name="send_limit_message" type="number" min="1"></label>
+          <label class="field"><span>Лимит почтовых программ (587/465): писем в час на ящик</span><input name="smtp_limit_hour" type="number" min="1"></label>
+          <div class="wide"><div class="eyebrow">Оповещения</div><p class="muted">Каждые 15 минут сервер проверяет сервисы, очередь, сертификат, место, чёрные списки, резервные копии и всплески отправки. О новой проблеме и её решении приходит сообщение; о нерешённой — раз в сутки.</p></div>
+          <label class="field"><span>Почта для оповещений (лучше внешний ящик)</span><input name="alert_email" type="email" placeholder="admin@gmail.com"></label>
+          <div></div>
+          <label class="field"><span>Telegram: токен бота (от @BotFather)</span><input name="telegram_token" autocomplete="off" placeholder="123456789:AA…"></label>
+          <label class="field"><span>Telegram: ID чата (напишите боту и узнайте у @userinfobot)</span><input name="telegram_chat" placeholder="123456789"></label>
           <p class="muted wide">В mynetworks добавляйте только сети, которым действительно разрешено отправлять письма без пароля (например, внутренний сервер приложений). Всё остальное — через 587 с авторизацией.</p>
           <div class="wide actions" data-admin><button class="primary-button" type="submit">Сохранить</button>
-            <button class="secondary-button" type="button" id="settings-apply">Применить к Postfix</button></div>
+            <button class="secondary-button" type="button" id="settings-apply">Применить к Postfix и Rspamd</button>
+            <button class="secondary-button" type="button" id="alerts-test">Отправить тестовое оповещение</button></div>
         </form>
       </article>
     </section>

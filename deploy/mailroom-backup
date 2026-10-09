@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Резервное копирование Mailroom (запускается от root: таймер, панель через помощника или вручную).
+#   mailroom-backup                — создать копию, удалить старые, отправить на удалённый сервер (если задан)
+#   mailroom-backup --restore FILE — восстановить из копии (спросит подтверждение)
+# Состав: база mailroom, /var/vmail, /var/lib/mailroom (DKIM-ключи, секреты), /etc/mailroom*,
+# конфиги Postfix/Dovecot/Rspamd/Fail2ban, календари Radicale. Архив шифруется GPG (AES256),
+# пароль — /etc/mailroom/backup.pass. Храните его отдельно от сервера: без него копия бесполезна.
+set -Eeuo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+umask 077
+DIR=/var/backups/mailroom
+PASS=/etc/mailroom/backup.pass
+KEY=/etc/mailroom/backup_ed25519
+STATUS=/var/lib/mailroom/backup-status.json
+exec 9>/run/mailroom-backup.lock
+flock -n 9 || { echo 'Копирование уже выполняется'; exit 0; }
+
+setting() { runuser -u postgres -- psql -X -d mailroom -Atc "SELECT value FROM settings WHERE key = '$1'" 2>/dev/null || true; }
+
+write_status() {  # ok file size seconds remote error
+  python3 - "$STATUS" "$@" <<'PY'
+import json, sys, os, datetime
+path, ok, file, size, secs, remote, error = sys.argv[1:8]
+data = {"finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "ok": ok == "1",
+        "file": file, "size": int(size or 0), "seconds": int(secs or 0), "remote": remote, "error": error[-500:]}
+tmp = path + ".tmp"
+with open(tmp, "w") as f: json.dump(data, f, ensure_ascii=False)
+os.chmod(tmp, 0o644); os.replace(tmp, path)
+PY
+}
+
+if [[ ${1:-} == --restore ]]; then
+  FILE=${2:?Укажите файл копии}
+  [[ -f $FILE ]] || { echo "Нет файла $FILE"; exit 1; }
+  WORK=$(mktemp -d /var/tmp/mailroom-restore.XXXXXX)
+  trap 'rm -rf -- "$WORK"' EXIT
+  gpg --batch --quiet --pinentry-mode loopback --passphrase-file "$PASS" -d "$FILE" | tar -xzf - -C "$WORK"
+  echo "Содержимое копии:"; ls "$WORK"; cat "$WORK/manifest.txt" 2>/dev/null || true
+  echo
+  echo 'Будут ЗАМЕНЕНЫ: база mailroom, письма /var/vmail, ключи DKIM и данные панели.'
+  echo 'Конфиги сервисов не трогаются (лежат в копии: etc/). Напечатайте RESTORE для продолжения:'
+  read -r answer; [[ $answer == RESTORE ]] || { echo 'Отменено'; exit 1; }
+  systemctl stop mailroom postfix dovecot radicale 2>/dev/null || true
+  runuser -u postgres -- pg_restore --clean --if-exists -d mailroom < "$WORK/mailroom.dump"
+  [[ -d $WORK/vmail ]] && { rm -rf /var/vmail.before-restore; mv /var/vmail /var/vmail.before-restore; cp -a "$WORK/vmail" /var/vmail; }
+  [[ -d $WORK/mailroom-data ]] && cp -a "$WORK/mailroom-data/." /var/lib/mailroom/
+  [[ -d $WORK/radicale ]] && cp -a "$WORK/radicale/." /var/lib/radicale/ 2>/dev/null || true
+  systemctl start postgresql dovecot postfix mailroom; systemctl start radicale 2>/dev/null || true
+  echo 'Восстановлено. Прежние письма сохранены в /var/vmail.before-restore — удалите после проверки.'
+  exit 0
+fi
+
+START=$(date +%s)
+FILE=''
+fail() { write_status 0 "$FILE" 0 $(( $(date +%s) - START )) '' "$1"; echo "ОШИБКА: $1" >&2; exit 1; }
+trap 'fail "строка $LINENO"' ERR
+
+[[ -s $PASS ]] || { install -d -m 0700 /etc/mailroom; openssl rand -base64 33 > "$PASS"; chmod 0600 "$PASS"; }
+install -d -m 0700 "$DIR"
+WORK=$(mktemp -d /var/tmp/mailroom-backup.XXXXXX)
+trap 'rm -rf -- "$WORK"' EXIT
+trap 'fail "строка $LINENO"' ERR
+
+runuser -u postgres -- pg_dump -Fc mailroom > "$WORK/mailroom.dump"
+{
+  echo "Mailroom backup $(date -Is) host $(hostname -f)"
+  echo "mailboxes: $(runuser -u postgres -- psql -X -d mailroom -Atc 'SELECT COUNT(*) FROM mailboxes')"
+  du -sh /var/vmail 2>/dev/null | awk '{print "vmail: " $1}'
+} > "$WORK/manifest.txt"
+
+FILE="$DIR/mailroom-$(date +%Y%m%d-%H%M%S).tar.gz.gpg"
+# Письма копируются без остановки Dovecot: Maildir устойчив к такому копированию,
+# письма, пришедшие во время копирования, попадут в следующую копию.
+set +e
+EXTRA=(); [[ -d /var/lib/radicale ]] && EXTRA=(var/lib/radicale etc/radicale)
+tar --numeric-owner --warning=no-file-changed -czf - \
+  --exclude=var/lib/mailroom/backup-status.json \
+  --transform 's,^var/vmail,vmail,;s,^var/lib/mailroom,mailroom-data,;s,^var/lib/radicale,radicale,' \
+  -C "$WORK" mailroom.dump manifest.txt \
+  -C / var/vmail var/lib/mailroom etc/mailroom etc/mailroom.env etc/postfix etc/dovecot etc/rspamd/local.d \
+  etc/fail2ban/jail.d "${EXTRA[@]}" 2>"$WORK/tar.err" \
+  | gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-file "$PASS" \
+        --symmetric --cipher-algo AES256 -o "$FILE.partial"
+codes=("${PIPESTATUS[@]}")
+set -e
+# tar: 1 = «файл изменился во время чтения» (живой Maildir) — допустимо.
+(( codes[0] <= 1 && codes[1] == 0 )) || fail "tar=${codes[0]} gpg=${codes[1]}: $(tail -3 "$WORK/tar.err")"
+mv "$FILE.partial" "$FILE"
+chmod 0600 "$FILE"
+
+KEEP=$(setting backup_keep); [[ $KEEP =~ ^[0-9]+$ ]] || KEEP=7
+ls -1t "$DIR"/mailroom-*.tar.gz.gpg 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f
+
+REMOTE=$(setting backup_remote) REMOTE_STATUS=''
+if [[ -n $REMOTE ]]; then
+  PORT=$(setting backup_remote_port); [[ $PORT =~ ^[0-9]+$ ]] || PORT=22
+  if [[ $REMOTE =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:/[A-Za-z0-9._/-]*$ ]]; then
+    if scp -q -P "$PORT" -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+         -o UserKnownHostsFile=/etc/mailroom/backup_known_hosts "$FILE" "$REMOTE/" 2>"$WORK/scp.err"; then
+      REMOTE_STATUS="отправлено на $REMOTE"
+    else
+      REMOTE_STATUS="не отправлено: $(tail -1 "$WORK/scp.err")"
+    fi
+  else
+    REMOTE_STATUS='неверный формат адреса (нужно user@host:/path)'
+  fi
+fi
+SIZE=$(stat -c %s "$FILE")
+write_status 1 "$FILE" "$SIZE" $(( $(date +%s) - START )) "$REMOTE_STATUS" ''
+echo "Готово: $FILE ($(numfmt --to=iec "$SIZE")) ${REMOTE_STATUS}"
+[[ -z $REMOTE || $REMOTE_STATUS == отправлено* ]]

@@ -6,6 +6,9 @@
   quota                                                      — занятое место всех ящиков (JSON)
   postconf-apply  (JSON в stdin)                             — myhostname, mynetworks, message_size_limit
   maildir-archive ДОМЕН ИМЯ                                  — перенести письма удалённого ящика в архив
+  backup-start                                               — запустить копирование в фоне
+  backup-list                                                — список копий (JSON)
+  ratelimit-apply ЧИСЛО                                      — лимит писем в час на ящик для отправки через 587/465
 """
 import ipaddress
 import json
@@ -118,6 +121,55 @@ def maildir_archive(domain, name):
     return 0
 
 
+def backup_start():
+    code, out = run(["/usr/bin/systemctl", "start", "--no-block", "mailroom-backup.service"])
+    print(out or "запущено")
+    return code
+
+
+def backup_list():
+    folder = "/var/backups/mailroom"
+    items = []
+    if os.path.isdir(folder):
+        for name in sorted(os.listdir(folder), reverse=True):
+            if re.fullmatch(r"mailroom-\d{8}-\d{6}\.tar\.gz\.gpg", name):
+                st = os.stat(os.path.join(folder, name))
+                items.append({"name": name, "size": st.st_size, "mtime": int(st.st_mtime)})
+    code, active = run(["/usr/bin/systemctl", "is-active", "mailroom-backup.service"])
+    print(json.dumps({"items": items, "running": active.strip() in ("active", "activating")}))
+    return 0
+
+
+RATELIMIT = """# Управляется Mailroom: лимит писем в час для каждого авторизованного ящика (587/465).
+rates {
+  mailroom_user {
+    selector = "user.lower";
+    bucket {
+      burst = %d;
+      rate = "%d / 1h";
+    }
+  }
+}
+"""
+
+
+def ratelimit_apply(value):
+    if not value.isdigit() or not 1 <= int(value) <= 100000:
+        die("Лимит: число от 1 до 100000")
+    n = int(value)
+    path = "/etc/rspamd/local.d/ratelimit.conf"
+    with open(path + ".tmp", "w") as f:
+        f.write(RATELIMIT % (n, n))
+    os.chmod(path + ".tmp", 0o644)
+    os.replace(path + ".tmp", path)
+    code, out = run(["/usr/bin/rspamadm", "configtest"])
+    if code:
+        die("rspamadm configtest: " + out, 1)
+    code, out = run(["/usr/bin/systemctl", "reload-or-restart", "rspamd"])
+    print(f"лимит {n} писем в час на ящик")
+    return code
+
+
 def main():
     if len(sys.argv) < 2:
         die(__doc__)
@@ -130,6 +182,12 @@ def main():
         return postconf_apply()
     if cmd == "maildir-archive" and len(args) == 2:
         return maildir_archive(*args)
+    if cmd == "backup-start" and not args:
+        return backup_start()
+    if cmd == "backup-list" and not args:
+        return backup_list()
+    if cmd == "ratelimit-apply" and len(args) == 1:
+        return ratelimit_apply(args[0])
     die("Неизвестная команда")
 
 

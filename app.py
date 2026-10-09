@@ -268,6 +268,14 @@ CREATE TABLE IF NOT EXISTS send_log (
 );
 CREATE INDEX IF NOT EXISTS send_log_idx ON send_log (mailbox_id, created_at);
 
+CREATE TABLE IF NOT EXISTS alert_state (
+    key TEXT PRIMARY KEY,
+    level TEXT NOT NULL,
+    title TEXT NOT NULL,
+    first_seen INTEGER NOT NULL,
+    notified_at INTEGER NOT NULL DEFAULT 0
+);
+
 -- Представления для Postfix и Dovecot (роль mailserver читает только их).
 CREATE OR REPLACE VIEW mail_domains AS
   SELECT lower(name) AS domain FROM domains WHERE status = 'active';
@@ -306,7 +314,15 @@ DEFAULT_SETTINGS = {
     "send_limit_message": "50",
     "imap_ports": "993",
     "ca_download": "1",
+    "smtp_limit_hour": "100",
+    "alert_email": "",
+    "telegram_token": "",
+    "telegram_chat": "",
+    "backup_keep": "7",
+    "backup_remote": "",
+    "backup_remote_port": "22",
 }
+SECRET_SETTINGS = {"telegram_token"}
 
 
 def init_db() -> None:
@@ -1496,7 +1512,10 @@ def audit_list():
 @app.get("/api/settings")
 @auth_required
 def settings_get():
-    return jsonify({"items": get_settings()})
+    items = get_settings()
+    for key in SECRET_SETTINGS:
+        items[key] = "••••••" if items.get(key) else ""
+    return jsonify({"items": items})
 
 
 @app.put("/api/settings")
@@ -1537,9 +1556,30 @@ def settings_put():
         if "127.0.0.0/8" not in nets:
             nets.insert(0, "127.0.0.0/8")
         updates["mynetworks"] = " ".join(nets)
-    for key, low, high in (("send_limit_hour", 1, 10000), ("send_limit_message", 1, 500)):
+    for key, low, high in (("send_limit_hour", 1, 10000), ("send_limit_message", 1, 500),
+                           ("smtp_limit_hour", 1, 100000), ("backup_keep", 1, 365), ("backup_remote_port", 1, 65535)):
         if key in data:
             updates[key] = str(as_int(data[key], 100, low, high))
+    if "alert_email" in data:
+        value = str(data["alert_email"]).strip().lower()
+        if value and not valid_email(value):
+            raise BadRequest("Адрес для оповещений указан неверно")
+        updates["alert_email"] = value
+    if "telegram_token" in data and data["telegram_token"] != "••••••":
+        value = str(data["telegram_token"]).strip()
+        if value and not re.fullmatch(r"\d{5,15}:[A-Za-z0-9_-]{20,64}", value):
+            raise BadRequest("Токен Telegram-бота имеет вид 123456789:AA…")
+        updates["telegram_token"] = value
+    if "telegram_chat" in data:
+        value = str(data["telegram_chat"]).strip()
+        if value and not re.fullmatch(r"-?\d{3,20}|@[A-Za-z0-9_]{5,32}", value):
+            raise BadRequest("ID чата Telegram — число (например, 123456789) или @канал")
+        updates["telegram_chat"] = value
+    if "backup_remote" in data:
+        value = str(data["backup_remote"]).strip()
+        if value and not re.fullmatch(r"[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:/[A-Za-z0-9._/-]*", value):
+            raise BadRequest("Удалённое хранилище: user@host:/путь/к/каталогу")
+        updates["backup_remote"] = value
     if not updates:
         raise BadRequest("Нет допустимых настроек")
     with db() as con:
@@ -1562,7 +1602,11 @@ def settings_apply():
     audit("Настройки применены к Postfix", out[:300], "INFO" if ok else "ERROR")
     if not ok:
         raise MailError(out or "Помощник не выполнил команду")
-    return jsonify({"status": "applied", "output": out})
+    ok2, out2 = mailcore.helper("ratelimit-apply", s["smtp_limit_hour"])
+    audit("Лимит отправки применён к Rspamd", out2[:200], "INFO" if ok2 else "ERROR")
+    if not ok2:
+        raise MailError("Postfix применён, но лимит Rspamd — нет: " + out2)
+    return jsonify({"status": "applied", "output": f"{out}; {out2}"})
 
 
 # ---------- диагностика ----------
@@ -1692,13 +1736,21 @@ def diag_send_test():
 
 # ---------- рекомендации ----------
 
-def rec(level: str, area: str, title: str, detail: str, fix: str = "", target: str = "") -> dict:
-    return {"level": level, "area": area, "title": title, "detail": detail, "fix": fix, "target": target}
+def rec(level: str, area: str, title: str, detail: str, fix: str = "", target: str = "", alert: bool = False) -> dict:
+    """alert=True — эксплуатационная проблема: о ней приходит оповещение."""
+    return {"level": level, "area": area, "title": title, "detail": detail, "fix": fix, "target": target, "alert": alert}
 
 
 @app.get("/api/recommendations")
 @auth_required
 def recommendations():
+    items = compute_recommendations()
+    order = {"fail": 0, "warn": 1, "info": 2}
+    return jsonify({"items": items, "summary": {k: sum(1 for i in items if i["level"] == k) for k in order},
+                    "article": ARTICLE_URL})
+
+
+def compute_recommendations(include_domains: bool = True) -> list[dict]:
     items = []
     with db() as con:
         settings = get_settings(con)
@@ -1729,11 +1781,11 @@ def recommendations():
             pass
     tls = mailcore.tls_check("127.0.0.1", 993)
     if not tls.get("ok"):
-        items.append(rec("fail", "TLS", "IMAPS (993) не отвечает", tls.get("error", ""), "Проверьте Dovecot: Логи → Dovecot"))
+        items.append(rec("fail", "TLS", "IMAPS (993) не отвечает", tls.get("error", ""), "Проверьте Dovecot: Логи → Dovecot", alert=True))
     else:
         if tls["days_left"] < 14:
             items.append(rec("fail" if tls["days_left"] < 3 else "warn", "TLS", "Сертификат скоро истекает",
-                             f"Осталось {tls['days_left']} дн.", "Обновите сертификат и перезагрузите Postfix и Dovecot."))
+                             f"Осталось {tls['days_left']} дн.", "Обновите сертификат и перезагрузите Postfix и Dovecot.", alert=True))
         if host and host not in tls.get("san", []):
             items.append(rec("warn", "TLS", "Сертификат не содержит имя сервера",
                              f"В сертификате: {', '.join(tls.get('san', [])) or tls.get('subject')}.",
@@ -1743,17 +1795,18 @@ def recommendations():
                              "Для внутренней сети это нормально, но почтовые программы будут предупреждать, "
                              "пока пользователи не установят корневой сертификат (он доступен в веб-почте).",
                              "Для публичного сервера получите сертификат Let's Encrypt (certbot)."))
-    for svc in ("postfix", "dovecot", "rspamd", "redis-server"):
+    for svc in ("postfix", "dovecot", "rspamd", "redis-server", "postgresql"):
         if service_state(svc) != "active":
-            items.append(rec("fail", "Сервисы", f"Сервис {svc} не работает", "", f"systemctl status {svc}", "logs"))
+            items.append(rec("fail", "Сервисы", f"Сервис {svc} не работает", "", f"systemctl status {svc}", "logs", alert=True))
     if service_state("fail2ban") != "active":
         items.append(rec("warn", "Безопасность", "Fail2ban не работает",
-                         "Без него перебор паролей SMTP/IMAP ничем не ограничен.", "apt install fail2ban; включите jail postfix-sasl и dovecot"))
+                         "Без него перебор паролей SMTP/IMAP ничем не ограничен.", "apt install fail2ban; включите jail postfix-sasl и dovecot",
+                         alert=True))
     q = queue_summary()
     if q.get("deferred", 0) > 20 or q.get("oldest_minutes", 0) > 240:
         items.append(rec("warn", "Очередь", "Письма задерживаются в очереди",
                          f"Отложено: {q.get('deferred')}, старейшее — {q.get('oldest_minutes')} мин.",
-                         "Очередь → причина задержки; Трассировка по адресу.", "queue"))
+                         "Очередь → причина задержки; Трассировка по адресу.", "queue", alert=True))
     for user in users:
         if user["role"] == "admin" and not user["totp_enabled"]:
             items.append(rec("warn", "Безопасность", f"У администратора {user['username']} нет 2FA",
@@ -1766,15 +1819,17 @@ def recommendations():
         free_pct = usage.free * 100 / usage.total
         if free_pct < 15:
             items.append(rec("fail" if free_pct < 5 else "warn", "Сервер", "Мало места для почты",
-                             f"Свободно {free_pct:.0f} %.", "Расширьте диск или уменьшите квоты."))
+                             f"Свободно {free_pct:.0f} %.", "Расширьте диск или уменьшите квоты.", alert=True))
     except OSError:
-        items.append(rec("fail", "Сервер", "Нет каталога /var/vmail", "", "Запустите deploy/install.sh"))
+        items.append(rec("fail", "Сервер", "Нет каталога /var/vmail", "", "Запустите deploy/install.sh", alert=True))
+    items += backup_recommendations(settings)
+    items += sending_recommendations(settings)
     if ip:
         for item in mailcore.dnsbl_check(ip):
             if item["status"] == "fail":
                 items.append(rec("fail", "Репутация", f"IP в чёрном списке {item['list']}", item["detail"],
-                                 "Найдите причину (взломанный ящик, открытый relay) и подайте заявку на удаление."))
-    for domain in domains:
+                                 "Найдите причину (взломанный ящик, открытый relay) и подайте заявку на удаление.", alert=True))
+    for domain in (domains if include_domains else []):
         name = domain["name"]
         if domain["status"] != "active":
             continue
@@ -1810,8 +1865,246 @@ def recommendations():
                                  "переходите к p=quarantine, затем к p=reject.", "Домены → DNS → DMARC", f"domain:{domain['id']}"))
     order = {"fail": 0, "warn": 1, "info": 2}
     items.sort(key=lambda i: order.get(i["level"], 3))
-    return jsonify({"items": items, "summary": {k: sum(1 for i in items if i["level"] == k) for k in order},
-                    "article": ARTICLE_URL})
+    return items
+
+
+# ---------- резервные копии ----------
+
+def read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def read_backup_status() -> dict | None:
+    try:
+        return json.loads((DATA_DIR / "backup-status.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def backup_recommendations(settings: dict) -> list[dict]:
+    status = read_backup_status()
+    if not status:
+        return [rec("warn", "Резервные копии", "Резервных копий ещё не было",
+                    "Без копий сбой диска или ошибка уничтожат всю почту, ключи DKIM и базу.",
+                    "Резервные копии → «Создать копию сейчас»; включите отправку на другой сервер.", "backups", alert=True)]
+    items = []
+    age_h = (datetime.now(timezone.utc) - datetime.fromisoformat(status["finished_at"])).total_seconds() / 3600
+    if not status.get("ok"):
+        items.append(rec("fail", "Резервные копии", "Последнее копирование завершилось ошибкой", status.get("error", ""),
+                         "Резервные копии → журнал; journalctl -u mailroom-backup", "backups", alert=True))
+    elif age_h > 48:
+        items.append(rec("fail", "Резервные копии", "Копия устарела", f"Последняя успешная — {int(age_h)} ч назад.",
+                         "Проверьте таймер: systemctl status mailroom-backup.timer", "backups", alert=True))
+    if status.get("ok") and settings.get("backup_remote") and not str(status.get("remote", "")).startswith("отправлено"):
+        items.append(rec("warn", "Резервные копии", "Копия не отправлена на удалённый сервер", status.get("remote", ""),
+                         "Добавьте публичный ключ панели на сервер хранения (Резервные копии).", "backups", alert=True))
+    if not settings.get("backup_remote"):
+        items.append(rec("info", "Резервные копии", "Копии хранятся только на этом сервере",
+                         "Если сервер выйдет из строя, пропадут и копии.", "Укажите удалённое хранилище в разделе «Резервные копии».",
+                         "backups"))
+    return items
+
+
+@app.get("/api/backups")
+@auth_required
+def backups_list():
+    ok, out = mailcore.helper("backup-list")
+    data = json.loads(out) if ok and out.startswith("{") else {"items": [], "running": False, "error": out}
+    s = get_settings()
+    data.update(status=read_backup_status(), pubkey=read_text(DATA_DIR / "backup_ed25519.pub"),
+                remote=s["backup_remote"], remote_port=s["backup_remote_port"], keep=s["backup_keep"])
+    return jsonify(data)
+
+
+@app.post("/api/backups/run")
+@auth_required
+@admin_only
+def backups_run():
+    ok, out = mailcore.helper("backup-start")
+    audit("Запущено резервное копирование", out[:200], "INFO" if ok else "ERROR")
+    if not ok:
+        raise MailError(out or "Не удалось запустить копирование")
+    return jsonify({"status": "started"})
+
+
+# ---------- активность ящиков (по журналам) ----------
+
+SASL_RE = re.compile(r"postfix/(submissions?)/smtpd\[\d+\]: [0-9A-F]+: client=[^\[]*\[([^\]]+)\].*sasl_username=(\S+)")
+SASL_FAIL_RE = re.compile(r"postfix/\S+/smtpd\[\d+\]: warning: [^\[]*\[([^\]]+)\]: SASL \S+ authentication failed")
+DOVE_LOGIN_RE = re.compile(r"(imap|pop3|managesieve)-login: Login: user=<([^>]*)>.*?rip=([0-9a-fA-F.:]+)")
+DOVE_FAIL_RE = re.compile(r"(imap|pop3)-login: .*auth failed.*?user=<([^>]*)>.*?rip=([0-9a-fA-F.:]+)")
+STAMP_RE = re.compile(r"^(\S+)")
+
+
+def collect_activity(hours: int = 24) -> dict:
+    since = f"-{hours}h"
+    ok1, post = mailcore.run(["journalctl", "-u", "postfix", "-u", "postfix@-", "--since", since, "-o", "short-iso",
+                              "--no-pager", "-g", "sasl_username=|authentication failed|Ratelimit"], timeout=20)
+    ok2, dove = mailcore.run(["journalctl", "-u", "dovecot", "--since", since, "-o", "short-iso", "--no-pager",
+                              "-g", "Login: user=|auth failed"], timeout=20)
+    boxes: dict[str, dict] = {}
+    fails: dict[str, int] = {}
+    ratelimited = 0
+    hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+
+    def box(user):
+        return boxes.setdefault(user.lower(), {"sent": 0, "sent_hour": 0, "send_ips": set(), "logins": 0,
+                                               "login_ips": set(), "last_login": "", "failures": 0})
+
+    def stamp(line):
+        try:
+            return datetime.fromisoformat(STAMP_RE.match(line).group(1))
+        except (ValueError, AttributeError):
+            return None
+
+    for line in (post or "").splitlines():
+        if m := SASL_RE.search(line):
+            b = box(m.group(3))
+            b["sent"] += 1
+            b["send_ips"].add(m.group(2))
+            ts = stamp(line)
+            if ts and ts >= hour_ago:
+                b["sent_hour"] += 1
+        elif m := SASL_FAIL_RE.search(line):
+            fails[m.group(1)] = fails.get(m.group(1), 0) + 1
+        elif "Ratelimit" in line:
+            ratelimited += 1
+    for line in (dove or "").splitlines():
+        if m := DOVE_LOGIN_RE.search(line):
+            if m.group(3) in ("127.0.0.1", "::1"):
+                continue  # веб-почта и служебные проверки
+            b = box(m.group(2).split("*")[0])
+            b["logins"] += 1
+            b["login_ips"].add(m.group(3))
+            b["last_login"] = STAMP_RE.match(line).group(1)
+        elif m := DOVE_FAIL_RE.search(line):
+            fails[m.group(3)] = fails.get(m.group(3), 0) + 1
+            if m.group(2):
+                box(m.group(2))["failures"] += 1
+    result = {user: {**v, "send_ips": sorted(v["send_ips"]), "login_ips": sorted(v["login_ips"])} for user, v in boxes.items()}
+    top_fails = sorted(fails.items(), key=lambda kv: -kv[1])[:20]
+    return {"hours": hours, "mailboxes": result, "failed_ips": [{"ip": ip, "count": n} for ip, n in top_fails],
+            "ratelimited": ratelimited, "journal_ok": ok1 and ok2}
+
+
+@app.get("/api/activity")
+@auth_required
+def activity():
+    return jsonify(collect_activity(as_int(request.args.get("hours"), 24, 1, 168)))
+
+
+def sending_recommendations(settings: dict) -> list[dict]:
+    items = []
+    limit = int(settings.get("smtp_limit_hour") or 100)
+    data = collect_activity(1)
+    for user, v in data["mailboxes"].items():
+        if v["sent_hour"] >= max(5, limit * 0.8):
+            items.append(rec("warn", "Отправка", f"Всплеск отправки: {user}",
+                             f"{v['sent_hour']} писем за час (лимит {limit}) с адресов {', '.join(v['send_ips'])}.",
+                             "Если владелец не делал рассылку — смените пароль ящика: возможно, он украден.", "activity", alert=True))
+    if data["ratelimited"]:
+        items.append(rec("fail", "Отправка", "Сработал лимит отправки",
+                         f"За час отклонено писем по лимиту: {data['ratelimited']}.",
+                         "Активность → кто отправлял; при подозрении на взлом смените пароль ящика.", "activity", alert=True))
+    total_fails = sum(f["count"] for f in data["failed_ips"])
+    if total_fails >= 50:
+        items.append(rec("warn", "Безопасность", "Перебор паролей",
+                         f"За час неудачных входов: {total_fails}, больше всего с {data['failed_ips'][0]['ip']}.",
+                         "Fail2ban блокирует адреса автоматически; проверьте, что он работает.", "activity", alert=True))
+    return items
+
+
+# ---------- оповещения ----------
+
+def notify(subject: str, text: str, settings: dict | None = None) -> list[str]:
+    """Отправить оповещение на почту и в Telegram. → список результатов по каналам."""
+    import urllib.parse
+    import urllib.request
+    s = settings or get_settings()
+    results = []
+    if s.get("alert_email"):
+        msg = EmailMessage()
+        msg["From"] = f"Mailroom <mailroom@{s['hostname']}>"
+        msg["To"] = s["alert_email"]
+        msg["Subject"] = subject
+        msg["Date"] = formatdate(localtime=True)
+        msg["Message-ID"] = make_msgid(domain=s["hostname"])
+        msg.set_content(text)
+        try:
+            with smtplib.SMTP(mailcore.SMTP_HOST, mailcore.SMTP_PORT, timeout=20) as smtp:
+                smtp.send_message(msg)
+            results.append(f"почта: {s['alert_email']}")
+        except (OSError, smtplib.SMTPException) as exc:
+            results.append(f"почта: ошибка {exc}")
+    if s.get("telegram_token") and s.get("telegram_chat"):
+        body = urllib.parse.urlencode({"chat_id": s["telegram_chat"], "text": f"{subject}\n\n{text}"[:4000]}).encode()
+        try:
+            req = urllib.request.Request(f"https://api.telegram.org/bot{s['telegram_token']}/sendMessage", data=body)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                results.append("Telegram: доставлено" if resp.status == 200 else f"Telegram: HTTP {resp.status}")
+        except OSError as exc:
+            results.append(f"Telegram: ошибка {getattr(exc, 'code', '')} {exc}".strip())
+    return results
+
+
+def run_alerts(send: bool = True) -> dict:
+    """Сравнить текущие проблемы с прошлым запуском и оповестить о новых, повторных (раз в сутки) и решённых."""
+    now = int(time.time())
+    current = {f"{i['area']}|{i['title']}": i for i in compute_recommendations(include_domains=False)
+               if i["alert"] and i["level"] in ("fail", "warn")}
+    with db() as con:
+        state = {r["key"]: r for r in con.all("SELECT * FROM alert_state")}
+        new = [k for k in current if k not in state]
+        repeat = [k for k in current if k in state and now - state[k]["notified_at"] > 86400]
+        resolved = [k for k in state if k not in current]
+        for k in new:
+            con.execute("INSERT INTO alert_state(key, level, title, first_seen, notified_at) VALUES (%s,%s,%s,%s,0)",
+                        (k, current[k]["level"], current[k]["title"], now))
+        for k in resolved:
+            con.execute("DELETE FROM alert_state WHERE key = %s", (k,))
+        settings = get_settings(con)
+    sent = []
+    if send and (new or repeat or resolved) and (settings.get("alert_email") or settings.get("telegram_token")):
+        lines = []
+        for k in new + repeat:
+            i = current[k]
+            mark = "ОШИБКА" if i["level"] == "fail" else "внимание"
+            lines.append(f"[{mark}] {i['title']}\n  {i['detail']}\n  Что делать: {i['fix']}".rstrip())
+        for k in resolved:
+            lines.append(f"[решено] {state[k]['title']}")
+        problems = len(current)
+        subject = (f"Mailroom {settings['hostname']}: " +
+                   (f"проблем — {problems}" if problems else "все проблемы решены"))
+        sent = notify(subject, "\n\n".join(lines) + "\n\nПанель: https://" + settings["hostname"] + ":5080/#recommendations",
+                      settings)
+        with db() as con:
+            for k in new + repeat:
+                con.execute("UPDATE alert_state SET notified_at = %s WHERE key = %s", (now, k))
+    return {"problems": list(current), "new": new, "repeat": repeat, "resolved": resolved, "sent": sent}
+
+
+@app.post("/api/alerts/test")
+@auth_required
+@admin_only
+def alerts_test():
+    s = get_settings()
+    if not s.get("alert_email") and not (s.get("telegram_token") and s.get("telegram_chat")):
+        raise BadRequest("Укажите адрес почты или Telegram-бота и сохраните настройки")
+    results = notify(f"Mailroom {s['hostname']}: тестовое оповещение",
+                     "Если вы видите это сообщение, оповещения настроены правильно.", s)
+    audit("Тестовое оповещение", "; ".join(results))
+    return jsonify({"results": results})
+
+
+@app.get("/api/alerts")
+@auth_required
+def alerts_state():
+    with db() as con:
+        rows = con.all("SELECT * FROM alert_state ORDER BY first_seen")
+    return jsonify({"items": rows})
 
 
 # ---------- веб-почта ----------
@@ -1820,7 +2113,8 @@ from webmail import bp as webmail_bp  # noqa: E402
 
 app.register_blueprint(webmail_bp)
 
-init_db()
+if os.getenv("MAILROOM_SKIP_INIT") != "1":
+    init_db()
 
 if __name__ == "__main__":
     app.run(host=os.getenv("MAIL_GATEWAY_HOST", "127.0.0.1"), port=int(os.getenv("MAIL_GATEWAY_PORT", "5080")))

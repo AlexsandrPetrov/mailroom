@@ -111,10 +111,68 @@ for f in .session-secret .bootstrap-admin; do
 done
 rm -f $APP/.bootstrap-mailboxes $APP/setup_runner.py $APP/setup_profile.json
 rm -rf $APP/__pycache__ $APP/templates $APP/static
-cp -r "$SRC"/app.py "$SRC"/mailcore.py "$SRC"/webmail.py "$SRC"/templates "$SRC"/static "$SRC"/docs "$SRC"/README.md $APP/
+cp -r "$SRC"/app.py "$SRC"/mailcore.py "$SRC"/webmail.py "$SRC"/mailroom_cli.py "$SRC"/templates "$SRC"/static "$SRC"/docs "$SRC"/README.md $APP/
 chown -R root:root $APP; chmod -R go-w $APP
 chown -R mailroom:mailroom $DATA/.session-secret $DATA/.bootstrap-admin 2>/dev/null || true
 install -m 0755 "$SRC"/deploy/mailroom-helper /usr/local/sbin/mailroom-helper
+install -m 0750 "$SRC"/deploy/mailroom-backup /usr/local/sbin/mailroom-backup
+cat > /usr/local/sbin/mailroom <<'EOF'
+#!/bin/sh
+# Консольная утилита Mailroom: mailroom --help
+[ "$(id -u)" = 0 ] || { echo 'Запустите от root: sudo mailroom ...' >&2; exit 1; }
+case "$1" in
+  backup) exec /usr/local/sbin/mailroom-backup ;;
+  restore) exec /usr/local/sbin/mailroom-backup --restore "$2" ;;
+esac
+set -a; . /etc/mailroom.env; set +a
+cd /opt/mailroom && exec runuser -u mailroom -- /usr/bin/python3 /opt/mailroom/mailroom_cli.py "$@"
+EOF
+chmod 0750 /usr/local/sbin/mailroom
+# Ключ для отправки копий на другой сервер: публичную часть панель показывает администратору.
+[[ -f $ETC/backup_ed25519 ]] || ssh-keygen -q -t ed25519 -N '' -C "mailroom-backup@$HOSTNAME_FQDN" -f $ETC/backup_ed25519
+install -o mailroom -g mailroom -m 0644 $ETC/backup_ed25519.pub $DATA/backup_ed25519.pub
+[[ -s $ETC/backup.pass ]] || (umask 077; openssl rand -base64 33 > $ETC/backup.pass)
+cat > /etc/systemd/system/mailroom-backup.service <<'EOF'
+[Unit]
+Description=Mailroom: резервная копия почты, базы и ключей
+After=postgresql.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mailroom-backup
+Nice=10
+IOSchedulingClass=idle
+EOF
+cat > /etc/systemd/system/mailroom-backup.timer <<'EOF'
+[Unit]
+Description=Mailroom: ежедневная резервная копия
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=20min
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+cat > /etc/systemd/system/mailroom-check.service <<EOF
+[Unit]
+Description=Mailroom: проверка сервера и оповещения
+After=mailroom.service
+[Service]
+Type=oneshot
+User=mailroom
+Group=mailroom
+WorkingDirectory=$APP
+EnvironmentFile=$ENVF
+ExecStart=/usr/bin/python3 $APP/mailroom_cli.py check
+EOF
+cat > /etc/systemd/system/mailroom-check.timer <<'EOF'
+[Unit]
+Description=Mailroom: проверка каждые 15 минут
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+[Install]
+WantedBy=timers.target
+EOF
 cat > /etc/sudoers.d/mailroom <<EOF
 mailroom ALL=(root) NOPASSWD: /usr/local/sbin/mailroom-helper
 EOF
@@ -150,6 +208,7 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable -q mailroom
+systemctl enable -q --now mailroom-backup.timer mailroom-check.timer
 systemctl restart mailroom
 for i in $(seq 30); do
   runuser -u postgres -- psql -X -d mailroom -Atc "SELECT 1 FROM pg_views WHERE viewname='mail_users'" | grep -q 1 && break
@@ -415,6 +474,10 @@ EOF
 [[ -f $DATA/dkim/selectors.map ]] || install -o mailroom -g _rspamd -m 0640 /dev/null $DATA/dkim/selectors.map
 rspamadm configtest >/dev/null
 
+# Лимит отправки для авторизованных ящиков (587/465); меняется в панели → «Применить к Postfix».
+LIMIT=$(runuser -u postgres -- psql -X -d mailroom -Atc "SELECT value FROM settings WHERE key='smtp_limit_hour'" 2>/dev/null || true)
+/usr/local/sbin/mailroom-helper ratelimit-apply "${LIMIT:-100}" >/dev/null
+
 echo '== Fail2ban'
 cat > /etc/fail2ban/jail.d/mailroom.local <<'EOF'
 [DEFAULT]
@@ -478,7 +541,7 @@ systemctl restart mailroom
 
 echo '== Проверки'
 sleep 2
-for s in postfix dovecot rspamd redis-server fail2ban mailroom; do printf '  %-13s %s\n' "$s" "$(systemctl is-active $s)"; done
+for s in postfix dovecot rspamd redis-server fail2ban mailroom mailroom-backup.timer mailroom-check.timer; do printf '  %-13s %s\n' "$s" "$(systemctl is-active $s)"; done
 ss -lntp | grep -E ':(25|465|587|993|995|143|4190|'"$PORT"')\b' | awk '{print "  " $4}'
 curl -s --cacert $ETC/tls/ca.crt "https://$LAN_IP:$PORT/api/health" --resolve "$HOSTNAME_FQDN:$PORT:$LAN_IP" >/dev/null \
   && echo "  панель: https://$LAN_IP:$PORT/  веб-почта: https://$LAN_IP:$PORT/mail" || echo '  панель не отвечает — journalctl -u mailroom'

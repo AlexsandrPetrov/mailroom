@@ -200,3 +200,4 @@ dialog.modal::backdrop { background: rgba(13, 29, 25, .6); }
 .event-row { grid-template-columns: 64px minmax(0, 1fr) auto; align-items: start; }
 .event-row > .pill { justify-self: start; align-self: start; text-align: center; min-width: 48px; }
 .pill { line-height: 1.5; }
+.notice.spaced { margin-top: 14px; }
