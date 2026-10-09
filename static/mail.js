@@ -166,7 +166,8 @@ async function loadList() {
   $('#bulk-spam').title = f.special === 'Junk' ? 'Не спам' : 'В спам';
   $('#bulk-spam').dataset.bulk = f.special === 'Junk' ? 'notspam' : 'spam';
   const params = {folder: state.folder, page: state.page, q: $('#search').value.trim(), field: $('#search-field').value,
-    unseen: $('#filter-unseen').checked ? 1 : 0, flagged: $('#filter-flagged').checked ? 1 : 0};
+    unseen: $('#filter-unseen').checked ? 1 : 0, flagged: $('#filter-flagged').checked ? 1 : 0,
+    threads: $('#threads-mode').checked ? 1 : 0};
   const d = await api(`/api/mail/messages?${q(params)}`);
   state.items = d.items;
   state.pages = d.pages;
@@ -183,26 +184,31 @@ function renderList() {
   }
   for (const m of state.items) {
     const row = document.createElement('div');
-    const seen = m.flags.includes('\\Seen');
-    row.className = `msg${seen ? '' : ' unread'}${state.current && state.current.uid === m.uid ? ' active' : ''}`;
+    const uids = m.thread || [m.uid];
+    const seen = m.thread ? !m.thread_unseen : m.flags.includes('\\Seen');
+    const active = state.current && uids.includes(state.current.uid);
+    row.className = `msg${seen ? '' : ' unread'}${active ? ' active' : ''}`;
     row.draggable = true;
     row.innerHTML = '<input type="checkbox" aria-label="Выбрать"><span class="who"></span><span class="date"></span><span class="subj"></span><span class="marks"></span>';
     const cb = $('input', row);
-    cb.checked = state.selected.has(m.uid);
-    cb.addEventListener('click', (e) => { e.stopPropagation(); cb.checked ? state.selected.add(m.uid) : state.selected.delete(m.uid); });
-    $('.who', row).textContent = outgoing ? `Кому: ${m.to.map(person).join(', ') || '—'}` : (m.from.map(person).join(', ') || '(без отправителя)');
+    cb.checked = uids.every((u) => state.selected.has(u));
+    cb.addEventListener('click', (e) => { e.stopPropagation(); uids.forEach((u) => (cb.checked ? state.selected.add(u) : state.selected.delete(u))); });
+    const who = m.participants && m.count > 1 ? m.participants : m.from;
+    $('.who', row).textContent = outgoing ? `Кому: ${m.to.map(person).join(', ') || '—'}` : (who.map(person).join(', ') || '(без отправителя)');
+    if (m.count > 1) $('.who', row).insertAdjacentHTML('beforeend', `<span class="count">${m.count}</span>`);
     $('.date', row).textContent = fmtDate(m.date);
     $('.subj', row).textContent = m.subject || '(без темы)';
     const marks = [];
-    if (m.flags.includes('\\Flagged')) marks.push(`<span class="flag">${icon('star', 'fill')} важное</span>`);
+    if (m.flagged || m.flags.includes('\\Flagged')) marks.push(`<span class="flag">${icon('star', 'fill')} важное</span>`);
     if (m.has_attachments) marks.push(`<span>${icon('clip')} вложение</span>`);
     if (m.flags.includes('\\Answered')) marks.push(`<span>${icon('reply')} отвечено</span>`);
     marks.push(`<span>${esc(fmtSize(m.size || 0))}</span>`);
     $('.marks', row).innerHTML = marks.join('');
-    row.addEventListener('click', () => (folderInfo().special === 'Drafts' ? openCompose('draft', m.uid) : openMessage(m.uid)));
+    row.addEventListener('click', () => (folderInfo().special === 'Drafts' ? openCompose('draft', m.uid)
+      : (m.count > 1 ? openThread(m.thread) : openMessage(m.uid))));
     row.addEventListener('dragstart', (e) => {
-      const uids = state.selected.has(m.uid) ? [...state.selected] : [m.uid];
-      e.dataTransfer.setData('text/plain', JSON.stringify(uids));
+      const drag = state.selected.has(m.uid) ? [...state.selected] : uids;
+      e.dataTransfer.setData('text/plain', JSON.stringify(drag));
     });
     box.appendChild(row);
   }
@@ -219,8 +225,14 @@ $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); state.
 $('#search-field').addEventListener('change', () => { if ($('#search').value) { state.page = 1; loadList().catch(fail); } });
 $('#filter-unseen').addEventListener('change', () => { state.page = 1; loadList().catch(fail); });
 $('#filter-flagged').addEventListener('change', () => { state.page = 1; loadList().catch(fail); });
+try { $('#threads-mode').checked = localStorage.getItem('mr-threads') === '1'; } catch (e) { /* без хранилища */ }
+$('#threads-mode').addEventListener('change', (e) => {
+  try { localStorage.setItem('mr-threads', e.target.checked ? '1' : '0'); } catch (err) { /* без хранилища */ }
+  state.page = 1;
+  loadList().catch(fail);
+});
 $('#select-all').addEventListener('change', (e) => {
-  state.selected = e.target.checked ? new Set(state.items.map((m) => m.uid)) : new Set();
+  state.selected = e.target.checked ? new Set(state.items.flatMap((m) => m.thread || [m.uid])) : new Set();
   renderList();
   $('#select-all').checked = e.target.checked;
 });
@@ -283,65 +295,159 @@ async function openMessage(uid) {
   } catch (e) { fail(e); }
 }
 
-function renderMessage() {
-  const m = state.current;
-  const view = $('#reader-view');
-  $('#reader-empty').classList.add('hidden');
-  view.classList.remove('hidden');
-  const f = folderInfo();
-  view.innerHTML = `<div class="reader-head"><h1></h1><dl class="reader-meta"></dl>
-    <div class="reader-actions">
+const ACTIONS = (m, f) => `<div class="reader-actions">
       <button class="btn" data-act="reply">${icon('reply')} Ответить</button><button class="btn" data-act="replyall">${icon('replyall')} Всем</button>
       <button class="btn" data-act="forward">${icon('forward')} Переслать</button>
       <button class="btn" data-act="flag">${icon('star', m.flags.includes('\\Flagged') ? 'fill' : '')} ${m.flags.includes('\\Flagged') ? 'Не важное' : 'Важное'}</button>
       <button class="btn" data-act="unread">${icon('dot')} Не прочитано</button>
       <button class="btn" data-act="${f.special === 'Junk' ? 'notspam' : 'spam'}">${icon('ban')} ${f.special === 'Junk' ? 'Не спам' : 'Спам'}</button>
       <button class="btn danger" data-act="delete">${icon('trash')} Удалить</button>
-      <button class="btn" data-act="raw">${icon('code')} Исходник</button></div></div>
-    <div class="reader-body"></div><div class="attachments hidden"></div>`;
-  $('h1', view).textContent = m.subject || '(без темы)';
-  const meta = $('.reader-meta', view);
+      <button class="btn" data-act="raw">${icon('code')} Исходник</button></div>`;
+
+function renderMeta(m, dl) {
   for (const [label, value] of [['От', people(m.from)], ['Кому', people(m.to)], ['Копия', people(m.cc)], ['Дата', fmtDate(m.date, true)]]) {
     if (!value) continue;
     const dt = document.createElement('dt'); dt.textContent = label;
     const dd = document.createElement('dd'); dd.textContent = value;
-    meta.append(dt, dd);
+    dl.append(dt, dd);
   }
-  const body = $('.reader-body', view);
-  if (m.spam) body.insertAdjacentHTML('beforeend', '<div class="banner danger">Письмо помечено как спам. Не переходите по ссылкам и не открывайте вложения, если не уверены в отправителе.</div>');
+}
+
+function renderBody(m, container, images, rerender) {
+  if (m.spam) container.insertAdjacentHTML('beforeend', '<div class="banner danger">Письмо помечено как спам. Не переходите по ссылкам и не открывайте вложения, если не уверены в отправителе.</div>');
   if (m.has_html) {
-    if (m.remote_images && !state.images) {
+    if (m.remote_images && !images) {
       const banner = document.createElement('div');
       banner.className = 'banner warn';
       banner.innerHTML = '<span>Внешние изображения скрыты: они позволяют отправителю узнать, что вы открыли письмо.</span><button class="btn">Показать изображения</button>';
-      $('button', banner).addEventListener('click', () => { state.images = true; renderMessage(); });
-      body.appendChild(banner);
+      $('button', banner).addEventListener('click', rerender);
+      container.appendChild(banner);
     }
     const frame = document.createElement('iframe');
     frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
     frame.setAttribute('referrerpolicy', 'no-referrer');
     frame.title = 'Текст письма';
-    frame.src = `/api/mail/message/html?${q({folder: state.folder, uid: m.uid, images: state.images ? 1 : 0})}`;
-    body.appendChild(frame);
+    frame.src = `/api/mail/message/html?${q({folder: state.folder, uid: m.uid, images: images ? 1 : 0})}`;
+    container.appendChild(frame);
   } else {
     const pre = document.createElement('pre');
     linkify(m.text || '', pre);
+    container.appendChild(pre);
+  }
+}
+
+function renderAttachments(m, att) {
+  if (!m.attachments.length) return;
+  att.classList.remove('hidden');
+  for (const a of m.attachments) {
+    const url = `/api/mail/attachment?${q({folder: state.folder, uid: m.uid, index: a.index})}`;
+    const link = document.createElement('a');
+    link.className = 'attachment';
+    link.href = url;
+    link.innerHTML = icon('clip');
+    link.append(` ${a.filename} · ${fmtSize(a.size)}`);
+    link.title = `Скачать ${a.filename}`;
+    if (!a.preview) { att.appendChild(link); continue; }
+    const wrap = document.createElement('span');
+    wrap.className = 'attachment-wrap';
+    const view = document.createElement('button');
+    view.type = 'button';
+    view.innerHTML = `${icon('eye')} Просмотр`;
+    view.addEventListener('click', () => openPreview(a, url));
+    wrap.append(link, view);
+    att.appendChild(wrap);
+  }
+}
+
+async function openPreview(a, url) {
+  const dlg = $('#preview-dlg');
+  const body = $('#preview-body');
+  $('#preview-title').textContent = a.filename;
+  $('#preview-download').href = url;
+  body.innerHTML = '';
+  const inline = `${url}&inline=1`;
+  if (a.preview === 'image') {
+    const img = document.createElement('img');
+    img.src = inline;
+    img.alt = a.filename;
+    body.appendChild(img);
+  } else if (a.preview === 'pdf') {
+    const frame = document.createElement('iframe');
+    frame.src = inline;
+    frame.title = a.filename;
+    body.appendChild(frame);
+  } else {
+    const pre = document.createElement('pre');
+    pre.textContent = 'Загрузка…';
     body.appendChild(pre);
+    try {
+      const r = await fetch(inline);
+      const text = await r.text();
+      pre.textContent = text.length > 500000 ? `${text.slice(0, 500000)}\n…(файл обрезан, скачайте целиком)` : text;
+    } catch (e) { pre.textContent = 'Не удалось загрузить файл'; }
   }
-  const att = $('.attachments', view);
-  if (m.attachments.length) {
-    att.classList.remove('hidden');
-    for (const a of m.attachments) {
-      const link = document.createElement('a');
-      link.className = 'attachment';
-      link.href = `/api/mail/attachment?${q({folder: state.folder, uid: m.uid, index: a.index})}`;
-      link.innerHTML = icon('clip');
-      link.append(` ${a.filename} · ${fmtSize(a.size)}`);
-      link.title = a.filename;
-      att.appendChild(link);
-    }
-  }
+  dlg.showModal();
+}
+$('#preview-close').addEventListener('click', () => { $('#preview-dlg').close(); $('#preview-body').innerHTML = ''; });
+
+function renderMessage() {
+  const m = state.current;
+  const view = $('#reader-view');
+  $('#reader-empty').classList.add('hidden');
+  view.classList.remove('hidden');
+  view.innerHTML = `<div class="reader-head"><h1></h1><dl class="reader-meta"></dl>${ACTIONS(m, folderInfo())}</div>
+    <div class="reader-body"></div><div class="attachments hidden"></div>`;
+  $('h1', view).textContent = m.subject || '(без темы)';
+  renderMeta(m, $('.reader-meta', view));
+  renderBody(m, $('.reader-body', view), state.images, () => { state.images = true; renderMessage(); });
+  renderAttachments(m, $('.attachments', view));
   $$('[data-act]', view).forEach((b) => b.addEventListener('click', () => readerAction(b.dataset.act)));
+}
+
+async function openThread(uids) {
+  try {
+    const d = await api(`/api/mail/thread?${q({folder: state.folder, uids: uids.join(',')})}`);
+    if (!d.items.length) return;
+    const last = d.items[d.items.length - 1];
+    state.current = last;
+    state.thread = d.items;
+    state.images = false;
+    const view = $('#reader-view');
+    $('#reader-empty').classList.add('hidden');
+    view.classList.remove('hidden');
+    view.innerHTML = `<div class="reader-head"><h1></h1><p class="small muted">Писем в цепочке: ${d.items.length}. Действия ниже относятся к последнему письму.</p>${ACTIONS(last, folderInfo())}</div>
+      <div class="thread-list"></div>`;
+    $('h1', view).textContent = d.items[0].subject || '(без темы)';
+    const list = $('.thread-list', view);
+    d.items.forEach((m, i) => {
+      const item = document.createElement('article');
+      item.className = `thread-item${i === d.items.length - 1 ? '' : ' collapsed'}`;
+      item.innerHTML = '<header><div><b class="who"></b><div class="snippet"></div></div><span class="small muted date"></span></header><div class="thread-content"><dl class="reader-meta"></dl><div class="body"></div><div class="attachments hidden"></div></div>';
+      $('.who', item).textContent = people(m.from) || '(без отправителя)';
+      $('.date', item).textContent = fmtDate(m.date, true);
+      $('.snippet', item).textContent = (m.text || '').replace(/\s+/g, ' ').slice(0, 160);
+      let rendered = false;
+      const render = (images) => {
+        const body = $('.body', item);
+        body.innerHTML = '';
+        renderBody(m, body, images, () => render(true));
+        if (!rendered) { renderMeta(m, $('.reader-meta', item)); renderAttachments(m, $('.attachments', item)); }
+        rendered = true;
+      };
+      $('header', item).addEventListener('click', () => {
+        item.classList.toggle('collapsed');
+        if (!item.classList.contains('collapsed') && !rendered) render(false);
+      });
+      if (i === d.items.length - 1) render(false);
+      list.appendChild(item);
+    });
+    $$('[data-act]', view).forEach((b) => b.addEventListener('click', () => readerAction(b.dataset.act)));
+    setView('reader');
+    loadFolders().catch(() => {});
+    const row = state.items.find((x) => x.thread && x.thread.includes(last.uid));
+    if (row) row.thread_unseen = 0;
+    renderList();
+  } catch (e) { fail(e); }
 }
 
 function readerAction(act) {
@@ -356,6 +462,79 @@ function readerAction(act) {
 
 // ---------- написание ----------
 const composeForm = $('#compose-form');
+const editor = $('#editor');
+const ALLOWED = new Set(['P', 'BR', 'DIV', 'SPAN', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'UL', 'OL', 'LI',
+  'BLOCKQUOTE', 'A', 'IMG', 'H1', 'H2', 'H3', 'PRE', 'CODE', 'HR', 'SUB', 'SUP']);
+// Очистка HTML для редактора: DOMParser не исполняет скрипты; остаются только безопасные теги и атрибуты.
+function cleanHtml(html) {
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+  const walk = (node, out) => {
+    for (const child of [...node.childNodes]) {
+      if (child.nodeType === Node.TEXT_NODE) { out.appendChild(document.createTextNode(child.textContent)); continue; }
+      if (child.nodeType !== Node.ELEMENT_NODE) continue;
+      if (['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'TITLE', 'HEAD'].includes(child.tagName)) continue;
+      if (!ALLOWED.has(child.tagName)) { walk(child, out); continue; }
+      const el = document.createElement(child.tagName);
+      if (child.tagName === 'A' && /^(https?:|mailto:)/i.test(child.getAttribute('href') || '')) el.setAttribute('href', child.getAttribute('href'));
+      if (child.tagName === 'IMG') {
+        const src = child.getAttribute('src') || '';
+        if (!/^data:image\/(png|jpeg|gif|webp);base64,/i.test(src)) continue;
+        el.setAttribute('src', src);
+      }
+      walk(child, el);
+      out.appendChild(el);
+    }
+    return out;
+  };
+  const box = document.createElement('div');
+  walk(doc.body, box);
+  return box.innerHTML;
+}
+const textToHtml = (text) => esc(text).replace(/\n/g, '<br>');
+const isPlain = () => $('#plain-mode').checked;
+function setPlain(on, convert = true) {
+  $('#plain-mode').checked = on;
+  composeForm.classList.toggle('plain', on);
+  if (!convert) return;
+  if (on) composeForm.body.value = editor.innerText;
+  else editor.innerHTML = textToHtml(composeForm.body.value);
+}
+$('#plain-mode').addEventListener('change', (e) => {
+  setPlain(e.target.checked);
+  try { localStorage.setItem('mr-plain', e.target.checked ? '1' : '0'); } catch (err) { /* без хранилища */ }
+});
+$$('#editor-bar [data-cmd]').forEach((b) => {
+  b.addEventListener('mousedown', (e) => e.preventDefault());
+  b.addEventListener('click', () => {
+    editor.focus();
+    const cmd = b.dataset.cmd;
+    if (cmd === 'quote') document.execCommand('formatBlock', false, 'blockquote');
+    else if (cmd === 'link') {
+      const url = prompt('Адрес ссылки (https://… или mailto:…):', 'https://');
+      if (url && /^(https?:\/\/|mailto:)/i.test(url)) document.execCommand('createLink', false, url);
+      else if (url) toast('Ссылка должна начинаться с https:// или mailto:', true);
+    } else document.execCommand(cmd, false, null);
+  });
+});
+$('#editor-image').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  if (file.size > 5 * 1048576) return toast('Картинка в тексте — до 5 МБ; большие файлы прикладывайте вложением', true);
+  const reader = new FileReader();
+  reader.onload = () => { editor.focus(); document.execCommand('insertImage', false, reader.result); };
+  reader.readAsDataURL(file);
+});
+editor.addEventListener('paste', (e) => {
+  const html = e.clipboardData.getData('text/html');
+  const text = e.clipboardData.getData('text/plain');
+  e.preventDefault();
+  if (html) document.execCommand('insertHTML', false, cleanHtml(html));
+  else document.execCommand('insertText', false, text);
+});
+editor.addEventListener('drop', (e) => {
+  if (e.dataTransfer.files.length) { e.preventDefault(); state.compose.files.push(...e.dataTransfer.files); renderFiles(); }
+});
 function resetCompose() {
   composeForm.reset();
   state.compose = {mode: 'new', files: [], keep: [], source: null, draftUid: null, reply: null, in_reply_to: '', references: ''};
@@ -372,6 +551,9 @@ async function openCompose(mode = 'new', uid = null) {
   const titles = {new: 'Новое письмо', reply: 'Ответ', replyall: 'Ответ всем', forward: 'Пересылка', draft: 'Черновик'};
   $('#compose-title').textContent = titles[mode] || 'Письмо';
   const signature = state.me.signature ? `\n\n-- \n${state.me.signature}` : '';
+  const signatureHtml = state.me.signature ? `<p><br></p><p>-- <br>${textToHtml(state.me.signature)}</p>` : '<p><br></p>';
+  let plainPref = false;
+  try { plainPref = localStorage.getItem('mr-plain') === '1'; } catch (e) { /* без хранилища */ }
   if (uid) {
     try {
       const d = await api(`/api/mail/compose?${q({folder: state.folder, uid, mode})}`);
@@ -380,6 +562,8 @@ async function openCompose(mode = 'new', uid = null) {
       if (d.bcc) { composeForm.bcc.value = d.bcc; $('#bcc-row').classList.remove('hidden'); }
       composeForm.subject.value = d.subject || '';
       composeForm.body.value = mode === 'draft' ? d.body : signature + d.body;
+      editor.innerHTML = cleanHtml(d.body_html ? (mode === 'draft' ? d.body_html : signatureHtml + d.body_html) : textToHtml(composeForm.body.value));
+      setPlain(mode === 'draft' ? !d.body_html : plainPref, false);
       c.in_reply_to = d.in_reply_to;
       c.references = d.references;
       c.source = d.source;
@@ -389,11 +573,21 @@ async function openCompose(mode = 'new', uid = null) {
     } catch (e) { return fail(e); }
   } else {
     composeForm.body.value = signature;
+    editor.innerHTML = signatureHtml;
+    setPlain(plainPref, false);
   }
   renderFiles();
   $('#compose-dlg').showModal();
-  (composeForm.to.value ? composeForm.body : composeForm.to).focus();
-  if (mode !== 'draft' && uid) composeForm.body.setSelectionRange(0, 0);
+  if (!composeForm.to.value) composeForm.to.focus();
+  else if (isPlain()) { composeForm.body.focus(); composeForm.body.setSelectionRange(0, 0); }
+  else {
+    editor.focus();
+    const range = document.createRange();
+    range.setStart(editor, 0);
+    range.collapse(true);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  }
 }
 $('#compose-btn').addEventListener('click', () => openCompose('new'));
 $('#show-bcc').addEventListener('click', () => $('#bcc-row').classList.remove('hidden'));
@@ -429,7 +623,9 @@ $('#compose-attach').addEventListener('change', (e) => {
 function composeData() {
   const c = state.compose;
   const fd = new FormData();
-  for (const key of ['to', 'cc', 'bcc', 'subject', 'body']) fd.append(key, composeForm[key].value);
+  for (const key of ['to', 'cc', 'bcc', 'subject']) fd.append(key, composeForm[key].value);
+  if (isPlain()) fd.append('body', composeForm.body.value);
+  else { fd.append('body', editor.innerText); fd.append('body_html', editor.innerHTML); }
   fd.append('in_reply_to', c.in_reply_to || '');
   fd.append('references', c.references || '');
   if (c.source && c.keep.length) {
@@ -654,17 +850,56 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape' && state.current) { closeReader(); setView('list'); }
 });
 
-// Проверка новой почты раз в минуту, пока вкладка открыта.
+// Мгновенно: сервер держит IMAP IDLE и присылает событие при новых письмах.
+let changeTimer = null;
+function inboxUnseen() { return state.folders.find((f) => f.special === 'INBOX')?.unseen || 0; }
+async function onMailChange() {
+  const before = inboxUnseen();
+  await loadFolders().catch(() => {});
+  if (state.folder === 'INBOX' && state.page === 1 && !state.selected.size && !$('#search').value) loadList().catch(() => {});
+  const after = inboxUnseen();
+  if (after > before) desktopNotify(after - before);
+}
+function startEvents() {
+  if (!window.EventSource) return;
+  const es = new EventSource('/api/mail/events');
+  es.addEventListener('change', () => { clearTimeout(changeTimer); changeTimer = setTimeout(onMailChange, 400); });
+  es.addEventListener('logout', () => { es.close(); location.href = '/mail/login'; });
+}
+function notifyEnabled() {
+  try { return localStorage.getItem('mr-notify') === '1' && window.Notification && Notification.permission === 'granted'; } catch (e) { return false; }
+}
+function desktopNotify(count) {
+  if (!notifyEnabled() || !document.hidden) return;
+  const n = new Notification('Новая почта', {body: count === 1 ? 'Пришло новое письмо' : `Новых писем: ${count}`, tag: 'mailroom-new'});
+  n.onclick = () => { window.focus(); openFolder('INBOX'); n.close(); };
+}
+function renderNotifyState() {
+  $('#notify-state').textContent = !window.Notification ? 'браузер не поддерживает уведомления'
+    : notifyEnabled() ? 'включены' : Notification.permission === 'denied' ? 'запрещены в настройках браузера' : 'выключены';
+  $('#notify-toggle').textContent = notifyEnabled() ? 'Выключить уведомления на рабочем столе' : 'Уведомлять о новых письмах на рабочем столе';
+}
+$('#notify-toggle').addEventListener('click', async () => {
+  if (!window.Notification) return;
+  if (notifyEnabled()) { try { localStorage.setItem('mr-notify', '0'); } catch (e) { /* */ } return renderNotifyState(); }
+  const permission = await Notification.requestPermission();
+  try { localStorage.setItem('mr-notify', permission === 'granted' ? '1' : '0'); } catch (e) { /* */ }
+  renderNotifyState();
+});
+
+// Запасная проверка раз в 5 минут — если поток событий оборвался.
 setInterval(() => {
   if (document.hidden || document.querySelector('dialog[open]')) return;
   loadFolders().catch(() => {});
   if (state.page === 1 && !state.selected.size && !$('#search').value) loadList().catch(() => {});
-}, 60000);
+}, 300000);
 
 (async () => {
   try {
     await loadMe();
     await loadFolders();
     await loadList();
+    renderNotifyState();
+    startEvents();
   } catch (e) { fail(e); }
 })();

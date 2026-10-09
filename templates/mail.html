@@ -49,6 +49,7 @@
         <span class="grow"></span>
         <label class="check small"><input type="checkbox" id="filter-unseen"> непрочит.</label>
         <label class="check small"><input type="checkbox" id="filter-flagged"> важные</label>
+        <label class="check small" title="Группировать переписку"><input type="checkbox" id="threads-mode"> цепочки</label>
         <button class="icon" id="refresh" title="Обновить"><svg class="i" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
       </div>
       <div class="list-toolbar hidden" id="folder-tools">
@@ -75,7 +76,22 @@
       <div class="compose-row"><span>Копия</span><input name="cc" autocomplete="off" data-suggest></div>
       <div class="compose-row hidden" id="bcc-row"><span>Скрытая</span><input name="bcc" autocomplete="off" data-suggest></div>
       <div class="compose-row"><span>Тема</span><input name="subject" maxlength="300"></div>
-      <textarea name="body" aria-label="Текст письма"></textarea>
+      <div class="editor-bar" id="editor-bar">
+        <button type="button" class="icon" data-cmd="bold" title="Жирный (Ctrl+B)"><svg class="i" aria-hidden="true"><use href="#i-bold"></use></svg></button>
+        <button type="button" class="icon" data-cmd="italic" title="Курсив (Ctrl+I)"><svg class="i" aria-hidden="true"><use href="#i-italic"></use></svg></button>
+        <button type="button" class="icon" data-cmd="underline" title="Подчёркнутый (Ctrl+U)"><svg class="i" aria-hidden="true"><use href="#i-underline"></use></svg></button>
+        <button type="button" class="icon" data-cmd="strikeThrough" title="Зачёркнутый"><svg class="i" aria-hidden="true"><use href="#i-strike"></use></svg></button>
+        <button type="button" class="icon" data-cmd="insertUnorderedList" title="Список"><svg class="i" aria-hidden="true"><use href="#i-ul"></use></svg></button>
+        <button type="button" class="icon" data-cmd="insertOrderedList" title="Нумерованный список"><svg class="i" aria-hidden="true"><use href="#i-ol"></use></svg></button>
+        <button type="button" class="icon" data-cmd="quote" title="Цитата"><svg class="i" aria-hidden="true"><use href="#i-quote"></use></svg></button>
+        <button type="button" class="icon" data-cmd="link" title="Ссылка"><svg class="i" aria-hidden="true"><use href="#i-link"></use></svg></button>
+        <label class="icon" title="Вставить картинку в текст"><svg class="i" aria-hidden="true"><use href="#i-image"></use></svg><input type="file" id="editor-image" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>
+        <button type="button" class="icon" data-cmd="removeFormat" title="Убрать оформление"><svg class="i" aria-hidden="true"><use href="#i-eraser"></use></svg></button>
+        <span class="grow"></span>
+        <label class="check small"><input type="checkbox" id="plain-mode"> простой текст</label>
+      </div>
+      <div class="editor" id="editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Текст письма"></div>
+      <textarea name="body" class="hidden" aria-label="Текст письма"></textarea>
       <div class="chips" id="compose-files"></div>
       <div class="error hidden" id="compose-error"></div>
     </div>
@@ -106,6 +122,8 @@
         <label class="field">Имя отправителя<input name="display_name" maxlength="100"></label>
         <div></div>
         <label class="field span2">Подпись (добавляется в новые письма)<textarea name="signature" rows="4" maxlength="2000"></textarea></label>
+        <div class="span2"><button class="btn" type="button" id="notify-toggle">Уведомлять о новых письмах на рабочем столе</button>
+          <span class="small muted" id="notify-state"></span></div>
       </div>
       <div data-tabpage="vacation" class="hidden stack">
         <label class="check"><input type="checkbox" name="vac_enabled"> Отвечать автоматически</label>
@@ -145,6 +163,14 @@
       <div class="error hidden" id="settings-error"></div>
     </form>
     <div class="dlg-foot" id="settings-foot"><button class="btn" id="settings-cancel" type="button">Закрыть</button><button class="btn primary" id="settings-save" type="button">Сохранить</button></div>
+  </div>
+</dialog>
+
+<dialog id="preview-dlg" class="preview">
+  <div class="dlg">
+    <div class="dlg-head"><h2 id="preview-title"></h2>
+      <div><a class="btn" id="preview-download" href="#">Скачать</a> <button class="icon" id="preview-close" aria-label="Закрыть"><svg class="i" aria-hidden="true"><use href="#i-close"></use></svg></button></div></div>
+    <div class="preview-body" id="preview-body"></div>
   </div>
 </dialog>
 

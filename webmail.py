@@ -21,7 +21,7 @@ from email.message import EmailMessage
 from email.utils import formataddr, formatdate, getaddresses, make_msgid
 from pathlib import Path
 
-from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, stream_with_context, url_for
 from psycopg2.extras import Json
 
 import mailcore
@@ -224,6 +224,49 @@ def me():
     })
 
 
+# ---------- мгновенные уведомления (IMAP IDLE → Server-Sent Events) ----------
+
+def session_alive(token_digest: str) -> bool:
+    """Проверка без продления: открытая вкладка не должна отменять автовыход по бездействию."""
+    now = int(time.time())
+    with app_module().db() as con:
+        row = con.one("""SELECT s.last_seen, s.created_at, m.status, d.status AS d_status FROM client_sessions s
+                           JOIN mailboxes m ON m.id = s.mailbox_id JOIN domains d ON d.id = m.domain_id
+                          WHERE s.token_hash = %s""", (token_digest,))
+    return bool(row and row["status"] == "active" and row["d_status"] == "active"
+                and now - row["last_seen"] <= IDLE_SECONDS and now - row["created_at"] <= MAX_SECONDS)
+
+
+@bp.get("/api/mail/events")
+@mail_auth
+def events():
+    address, digest = g.mail["address"], g.mail["token_hash"]
+
+    def stream():
+        yield "retry: 5000\n\n"
+        try:
+            box = mailcore.Mailbox(address)
+        except MailError:
+            yield "event: unavailable\ndata: {}\n\n"
+            return
+        try:
+            box.select("INBOX", readonly=True)
+            deadline = time.time() + 600  # затем браузер переподключится сам
+            while time.time() < deadline:
+                changed = box.idle(25)
+                if not session_alive(digest):
+                    yield "event: logout\ndata: {}\n\n"
+                    return
+                yield "event: change\ndata: {}\n\n" if changed else ": ping\n\n"
+        except (MailError, OSError):
+            return
+        finally:
+            box.__exit__(None, None, None)
+
+    return Response(stream_with_context(stream()), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 # ---------- папки ----------
 
 @bp.get("/api/mail/folders")
@@ -299,15 +342,36 @@ def messages():
     page = max(1, int(request.args.get("page", 1) or 1))
     query = request.args.get("q", "").strip()[:200]
     field = request.args.get("field", "all")
+    unseen, flagged = request.args.get("unseen") == "1", request.args.get("flagged") == "1"
+    threaded = request.args.get("threads") == "1"
     with mailcore.Mailbox(g.mail["address"]) as box:
         box.select(folder, readonly=True)
-        uids = box.search(query, field, request.args.get("unseen") == "1", request.args.get("flagged") == "1")
-        total = len(uids)
-        chunk = uids[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
-        items = box.headers(chunk)
+        if threaded:
+            groups = box.threads(query, field, unseen, flagged)
+            total = len(groups)
+            chunk = groups[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
+            heads = {h["uid"]: h for h in box.headers([u for g in chunk for u in g])}
+            items = []
+            for group in chunk:
+                members = [heads[u] for u in group if u in heads]
+                if not members:
+                    continue
+                last = dict(members[-1])
+                last["thread"] = group
+                last["count"] = len(group)
+                last["participants"] = list({a["email"]: a for m in members for a in m["from_"]}.values())
+                last["thread_unseen"] = sum(1 for m in members if "\\Seen" not in m["flags"])
+                last["has_attachments"] = any(m["has_attachments"] for m in members)
+                last["flagged"] = any("\\Flagged" in m["flags"] for m in members)
+                items.append(last)
+        else:
+            uids = box.search(query, field, unseen, flagged)
+            total = len(uids)
+            items = box.headers(uids[(page - 1) * PAGE_SIZE: page * PAGE_SIZE])
     for item in items:
         item["from"] = item.pop("from_")
-    return jsonify({"items": items, "total": total, "page": page, "pages": max(1, -(-total // PAGE_SIZE))})
+    return jsonify({"items": items, "total": total, "page": page, "pages": max(1, -(-total // PAGE_SIZE)),
+                    "threads": threaded})
 
 
 REMOTE_IMG = re.compile(r"""(?:src|background)\s*=\s*["']?\s*(?:https?:)?//|url\(\s*["']?\s*(?:https?:)?//""", re.I)
@@ -319,12 +383,39 @@ def message():
     folder, uid = folder_param(), uid_param()
     with mailcore.Mailbox(g.mail["address"]) as box:
         box.select(folder)
-        msg = box.fetch(uid)
-        box.flags([uid], "\\Seen", True)
-        typ, data = box.conn.uid("FETCH", str(uid), "(FLAGS)")
-        flags = re.search(rb"FLAGS \(([^)]*)\)", data[0] or b"") if typ == "OK" and data and data[0] else None
+        return jsonify(message_detail(box, folder, uid))
+
+
+@bp.get("/api/mail/thread")
+@mail_auth
+def thread():
+    folder = folder_param()
+    try:
+        uids = sorted({int(u) for u in request.args.get("uids", "").split(",") if u.strip()})[:100]
+    except ValueError:
+        uids = []
+    if not uids:
+        bad("Не указаны письма цепочки")
+    with mailcore.Mailbox(g.mail["address"]) as box:
+        box.select(folder)
+        items = []
+        for uid in uids:
+            try:
+                items.append(message_detail(box, folder, uid))
+            except MailError:
+                continue
+    return jsonify({"items": items})
+
+
+def message_detail(box, folder: str, uid: int) -> dict:
+    msg = box.fetch(uid)
+    box.flags([uid], "\\Seen", True)
+    typ, data = box.conn.uid("FETCH", str(uid), "(FLAGS)")
+    flags = re.search(rb"FLAGS \(([^)]*)\)", data[0] or b"") if typ == "OK" and data and data[0] else None
     parts = mailcore.message_parts(msg)
-    return jsonify({
+    for item in parts["attachments"]:
+        item["preview"] = preview_kind(item["type"], item["filename"])
+    return ({
         "uid": uid, "folder": folder,
         "subject": str(msg.get("Subject") or ""), "date": mailcore.iso_date(msg.get("Date")),
         "from": mailcore.address_list(msg.get("From")), "to": mailcore.address_list(msg.get("To")),
@@ -335,6 +426,7 @@ def message():
         "flags": flags.group(1).decode().split() if flags else [],
         "spam": str(msg.get("X-Spam") or "").lower() == "yes",
         "list_unsubscribe": str(msg.get("List-Unsubscribe") or "")[:500],
+        "message_id": str(msg.get("Message-ID") or ""),
     })
 
 
@@ -390,6 +482,20 @@ def safe_filename(name: str) -> str:
     return name[:150]
 
 
+PREVIEW_TYPES = {"image/png": "image", "image/jpeg": "image", "image/gif": "image", "image/webp": "image",
+                 "application/pdf": "pdf", "text/plain": "text", "text/csv": "text"}
+
+
+def preview_kind(ctype: str, filename: str) -> str | None:
+    """Что можно безопасно показать в браузере. SVG и HTML — только скачиванием (могут содержать скрипты)."""
+    kind = PREVIEW_TYPES.get((ctype or "").lower())
+    if kind:
+        return kind
+    ext = (filename or "").lower().rsplit(".", 1)[-1]
+    return {"png": "image", "jpg": "image", "jpeg": "image", "gif": "image", "webp": "image", "pdf": "pdf",
+            "txt": "text", "csv": "text", "log": "text"}.get(ext)
+
+
 @bp.get("/api/mail/attachment")
 @mail_auth
 def attachment():
@@ -402,10 +508,28 @@ def attachment():
     if part is None or part.is_multipart():
         bad("Вложение не найдено", 404)
     name = safe_filename(part.get_filename() or f"attachment-{index}")
+    data = part.get_payload(decode=True) or b""
+    kind = preview_kind(part.get_content_type(), name) if request.args.get("inline") == "1" else None
+    if kind:
+        ext = name.lower().rsplit(".", 1)[-1]
+        ctype = {"image": f"image/{'jpeg' if ext in ('jpg', 'jpeg') else ext if ext in ('png', 'gif', 'webp') else 'png'}",
+                 "pdf": "application/pdf", "text": "text/plain; charset=utf-8"}[kind]
+        if kind == "image" and part.get_content_type() in PREVIEW_TYPES:
+            ctype = part.get_content_type()
+        if kind == "text":
+            charset = part.get_content_charset() or "utf-8"
+            data = data.decode(charset, errors="replace").encode()
+        headers = {"Content-Disposition": "inline", "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store",
+                   "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; "
+                                              "frame-ancestors 'self'",
+                   "X-Frame-Options": "SAMEORIGIN"}
+        if kind == "pdf":
+            headers["Content-Security-Policy"] = "frame-ancestors 'self'"
+        return Response(data, mimetype=ctype, headers=headers)
     ascii_name = name.encode("ascii", "replace").decode().replace("?", "_")
     quoted = re.sub(r"[^A-Za-z0-9._-]", lambda m: "%%%02X" % ord(m.group()) if ord(m.group()) < 128 else
                     "".join("%%%02X" % b for b in m.group().encode()), name)
-    return Response(part.get_payload(decode=True) or b"", mimetype="application/octet-stream", headers={
+    return Response(data, mimetype="application/octet-stream", headers={
         "Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quoted}",
         "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
 
@@ -464,6 +588,33 @@ def quote_text(msg) -> str:
     return text or ""
 
 
+def original_html(msg) -> str:
+    """HTML исходного письма для редактора: очищенный, встроенные картинки cid → data:."""
+    parts = mailcore.message_parts(msg)
+    if not parts["html"]:
+        return htmllib.escape(parts["text"] or "").replace("\n", "<br>")
+    body = parts["html"]
+
+    def inline(m):
+        index = parts["inline"].get(m.group(1))
+        part = mailcore.walk_part(msg, index) if index is not None else None
+        data = (part.get_payload(decode=True) or b"") if part else b""
+        if not part or len(data) > 3 * 1024 * 1024 or part.get_content_subtype() not in ("png", "jpeg", "gif", "webp"):
+            return 'src=""'
+        return f'src="data:image/{part.get_content_subtype()};base64,{base64.b64encode(data).decode()}"'
+
+    body = re.sub(r"""src\s*=\s*["']?cid:([^"'\s>]+)["']?""", inline, body, flags=re.I)
+    return mailcore.sanitize_html(body)
+
+
+def human_date(value) -> str:
+    try:
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(str(value)).strftime("%d.%m.%Y %H:%M")
+    except (TypeError, ValueError):
+        return str(value or "")
+
+
 def subject_with(prefix: str, subject: str) -> str:
     return subject if re.match(rf"^\s*{prefix}:", subject, re.I) else f"{prefix}: {subject}"
 
@@ -485,22 +636,29 @@ def compose_source():
     result = {"mode": mode, "to": "", "cc": "", "subject": subject, "body": "", "attachments": [],
               "in_reply_to": "", "references": "", "source": {"folder": folder, "uid": uid}}
     if mode == "draft":
+        has_html = mailcore.message_parts(msg)["html"] is not None
         result.update(to=str(msg.get("To") or ""), cc=str(msg.get("Cc") or ""), bcc=str(msg.get("Bcc") or ""),
-                      body=quote_text(msg), in_reply_to=str(msg.get("In-Reply-To") or ""),
+                      body=quote_text(msg), body_html=original_html(msg) if has_html else "",
+                      in_reply_to=str(msg.get("In-Reply-To") or ""),
                       references=str(msg.get("References") or ""),
                       attachments=mailcore.message_parts(msg)["attachments"])
         return jsonify(result)
-    date = str(msg.get("Date") or "")
+    date = human_date(msg.get("Date"))
     who = fmt(mailcore.address_list(msg.get("From")))
+    esc = lambda s: htmllib.escape(str(s or ""))
     if mode == "forward":
         header = (f"\n\n-------- Пересылаемое сообщение --------\nТема: {subject}\nДата: {date}\nОт: {who}\n"
                   f"Кому: {msg.get('To') or ''}\n\n")
         result.update(subject=subject_with("Fwd", subject), body=header + quote_text(msg),
+                      body_html=(f"<p><br></p><p>-------- Пересылаемое сообщение --------<br>Тема: {esc(subject)}<br>"
+                                 f"Дата: {esc(date)}<br>От: {esc(who)}<br>Кому: {esc(msg.get('To'))}</p>"
+                                 f"<div>{original_html(msg)}</div>"),
                       attachments=mailcore.message_parts(msg)["attachments"])
         return jsonify(result)
     quoted = "\n".join("> " + line for line in quote_text(msg).splitlines())
     result["subject"] = subject_with("Re", subject)
     result["body"] = f"\n\n{date}, {who} пишет:\n{quoted}"
+    result["body_html"] = f"<p><br></p><p>{esc(date)}, {esc(who)} пишет:</p><blockquote>{original_html(msg)}</blockquote>"
     result["to"] = fmt(sender)
     if mode == "replyall":
         others = [a for a in mailcore.address_list(msg.get("To")) + mailcore.address_list(msg.get("Cc"))
@@ -551,8 +709,22 @@ def build_message(data: dict, files, me: dict, draft: bool = False):
         if value and re.fullmatch(r"(<[^<>\s]+>\s*)+", value):
             msg["In-Reply-To" if header == "in_reply_to" else "References"] = value
     msg["User-Agent"] = "Mailroom Webmail"
-    msg.set_content(body)
-    total = 0
+    body_html = str(data.get("body_html", "") or "")
+    related = []
+    if body_html.strip():
+        if len(body_html) > 15_000_000:
+            bad("Слишком большое письмо")
+        clean, related = mailcore.split_data_images(mailcore.sanitize_html(body_html))
+        msg.set_content(mailcore.html_to_text(clean))
+        msg.add_alternative('<!doctype html><html><head><meta charset="utf-8"></head><body>'
+                            '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5">'
+                            f"{clean}</div></body></html>", subtype="html")
+        html_part = msg.get_payload()[1]
+        for cid, subtype, image in related:
+            html_part.add_related(image, maintype="image", subtype=subtype, cid=f"<{cid}>")
+    else:
+        msg.set_content(body)
+    total = sum(len(image) for _cid, _sub, image in related)
     for file in files:
         data_bytes = file.read()
         total += len(data_bytes)

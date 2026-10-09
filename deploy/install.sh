@@ -192,7 +192,7 @@ User=mailroom
 Group=mailroom
 WorkingDirectory=$APP
 EnvironmentFile=$ENVF
-ExecStart=/usr/bin/gunicorn --workers 3 --threads 4 --worker-class gthread --timeout 90 \\
+ExecStart=/usr/bin/gunicorn --workers 3 --threads 16 --worker-class gthread --timeout 90 \\
   --bind $LAN_IP:$PORT --certfile $ETC/tls/server.crt --keyfile $ETC/tls/server.key \\
   --access-logfile - app:app
 Restart=on-failure

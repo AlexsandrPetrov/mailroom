@@ -290,6 +290,52 @@ class Mailbox:
         m = re.search(rb"APPENDUID \d+ (\d+)", data[0] or b"")
         return int(m.group(1)) if m else None
 
+    def idle(self, timeout: float = 25) -> bool:
+        """IMAP IDLE на выбранной папке: True, если сервер сообщил об изменениях за timeout секунд."""
+        import select
+        tag = self.conn._new_tag().decode()
+        self.conn.send(f"{tag} IDLE\r\n".encode())
+        if not self.conn.readline().startswith(b"+"):
+            raise MailError("Сервер не поддерживает IDLE")
+        changed = False
+        ready, _, _ = select.select([self.conn.sock], [], [], timeout)
+        if ready:
+            line = self.conn.readline()
+            changed = line.startswith(b"*")
+        self.conn.send(b"DONE\r\n")
+        while True:
+            line = self.conn.readline()
+            if not line:
+                raise MailError("Соединение с почтовым сервером разорвано")
+            if line.startswith(b"*"):
+                changed = True
+            if line.startswith(tag.encode()):
+                return changed
+
+    def threads(self, query: str = "", field: str = "all", unseen: bool = False, flagged: bool = False) -> list[list[int]]:
+        """Цепочки (THREAD REFERENCES): группы UID, новые сверху."""
+        criteria = (["UNSEEN"] if unseen else []) + (["FLAGGED"] if flagged else [])
+        if query:
+            criteria.append({"from": "FROM", "subject": "SUBJECT", "body": "BODY", "to": "TO"}.get(field, "TEXT"))
+            self.conn.literal = query.encode()
+        typ, data = self.conn.uid("THREAD", "REFERENCES", "UTF-8", *(criteria or ["ALL"]))
+        self._ok(typ, data, "Цепочки не построены")
+        raw = (data[0] or b"").decode()
+        groups, depth, current = [], 0, []
+        for token in re.findall(r"\(|\)|\d+", raw):
+            if token == "(":
+                depth += 1
+            elif token == ")":
+                depth -= 1
+                if depth == 0 and current:
+                    groups.append(current)
+                    current = []
+            else:
+                current.append(int(token))
+        groups = [sorted(g) for g in groups]
+        groups.sort(key=lambda g: -g[-1])
+        return groups
+
     def quota(self) -> dict | None:
         typ, data = self.conn.getquotaroot("INBOX")
         if typ != "OK":
@@ -369,6 +415,108 @@ def walk_part(msg, index: int):
         if i == index:
             return part
     return None
+
+
+# ---------- HTML писем, которые пишет пользователь ----------
+
+from html.parser import HTMLParser
+import html as _html
+
+ALLOWED_TAGS = {"p", "br", "div", "span", "b", "strong", "i", "em", "u", "s", "strike", "ul", "ol", "li",
+                "blockquote", "a", "img", "h1", "h2", "h3", "pre", "code", "hr", "sub", "sup"}
+VOID_TAGS = {"br", "img", "hr"}
+DATA_IMG = re.compile(r"data:image/(png|jpeg|gif|webp);base64,([A-Za-z0-9+/=\s]+)$")
+
+
+class _Sanitizer(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out, self.stack, self.skip = [], [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style", "iframe", "object", "embed", "head", "title", "svg", "math"):
+            self.skip += 1
+            return
+        if self.skip or tag not in ALLOWED_TAGS:
+            return
+        keep = []
+        for name, value in attrs:
+            value = (value or "").strip()
+            if tag == "a" and name == "href" and re.match(r"(https?:|mailto:)", value, re.I):
+                keep.append(f'href="{_html.escape(value, quote=True)}"')
+            elif tag == "img" and name == "src" and (DATA_IMG.match(value) or value.startswith("cid:")):
+                keep.append(f'src="{_html.escape(value, quote=True)}"')
+            elif tag == "img" and name == "alt":
+                keep.append(f'alt="{_html.escape(value, quote=True)}"')
+        if tag == "img" and not any(k.startswith("src=") for k in keep):
+            return
+        if tag == "a":
+            keep.append('rel="noopener noreferrer"')
+        self.out.append(f"<{tag}{(' ' + ' '.join(keep)) if keep else ''}>")
+        if tag not in VOID_TAGS:
+            self.stack.append(tag)
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style", "iframe", "object", "embed", "head", "title", "svg", "math"):
+            self.skip = max(0, self.skip - 1)
+            return
+        if self.skip or tag not in self.stack:
+            return
+        while self.stack:
+            top = self.stack.pop()
+            self.out.append(f"</{top}>")
+            if top == tag:
+                break
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.out.append(_html.escape(data, quote=False))
+
+    def result(self):
+        while self.stack:
+            self.out.append(f"</{self.stack.pop()}>")
+        return "".join(self.out)
+
+
+def sanitize_html(text: str) -> str:
+    parser = _Sanitizer()
+    parser.feed(text or "")
+    parser.close()
+    return parser.result()
+
+
+def html_to_text(text: str) -> str:
+    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", text or "", flags=re.S | re.I)
+    text = re.sub(r"<li[^>]*>", "\n• ", text, flags=re.I)
+    text = re.sub(r'<a [^>]*href="([^"]+)"[^>]*>(.*?)</a>', lambda m: m.group(2) if m.group(1) in m.group(2)
+                  else f"{m.group(2)} ({m.group(1)})", text, flags=re.I | re.S)
+    text = re.sub(r"<blockquote[^>]*>(.*?)</blockquote>",
+                  lambda m: "\n" + "\n".join("> " + l for l in html_to_text(m.group(1)).splitlines()) + "\n",
+                  text, flags=re.I | re.S)
+    text = re.sub(r"<br\s*/?>|</p>|</div>|</h[1-3]>|</tr>|</ul>|</ol>|<hr[^>]*>", "\n", text, flags=re.I)
+    text = _html.unescape(re.sub(r"<[^>]+>", "", text))
+    return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
+
+
+def split_data_images(text: str) -> tuple[str, list[tuple[str, str, bytes]]]:
+    """Картинки data: из редактора → вложения cid. → (html, [(cid, subtype, bytes)])"""
+    images = []
+
+    def repl(m):
+        found = DATA_IMG.match(_html.unescape(m.group(1)))
+        if not found:
+            return m.group(0)
+        data = base64.b64decode(found.group(2))
+        cid = f"img{len(images) + 1}.{secrets_hex()}@mailroom"
+        images.append((cid, found.group(1), data))
+        return f'src="cid:{cid}"'
+
+    return re.sub(r'src="(data:image/[^"]+)"', repl, text), images
+
+
+def secrets_hex() -> str:
+    import secrets
+    return secrets.token_hex(6)
 
 
 # ---------- ManageSieve ----------
