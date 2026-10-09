@@ -191,3 +191,12 @@ dialog.modal::backdrop { background: rgba(13, 29, 25, .6); }
 .i { width: 18px; height: 18px; flex: none; vertical-align: -4px; fill: none; stroke: currentColor; stroke-width: 2;
   stroke-linecap: round; stroke-linejoin: round; }
 .i.fill { fill: currentColor; }
+
+/* рекомендации: длинные значения (ключи DKIM) переносятся, текст слева */
+.rec > div { min-width: 0; text-align: left; }
+.rec h4, .rec p, .rec .fix { overflow-wrap: anywhere; }
+.rec > div:first-child { padding-top: 2px; }
+/* журнал: метка уровня не растягивается по высоте строки */
+.event-row { grid-template-columns: 64px minmax(0, 1fr) auto; align-items: start; }
+.event-row > .pill { justify-self: start; align-self: start; text-align: center; min-width: 48px; }
+.pill { line-height: 1.5; }
