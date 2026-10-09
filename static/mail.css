@@ -168,3 +168,17 @@ dialog::backdrop { background: rgba(10, 20, 17, .55); }
 .i { width: 18px; height: 18px; flex: none; vertical-align: -4px; fill: none; stroke: currentColor; stroke-width: 2;
   stroke-linecap: round; stroke-linejoin: round; }
 .i.fill { fill: currentColor; }
+
+/* Телефон: ничего не шире экрана */
+.msg { grid-template-columns: 22px minmax(0, 1fr) auto; }
+.search input { min-width: 0; }
+@media (max-width: 780px) {
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .list-pane, .reader, .folders { min-width: 0; }
+  .topbar { gap: 6px; padding: 0 8px; }
+  .search { min-width: 0; }
+  .search select { display: none; }
+  body.view-list .brand { display: none; }
+  .list-toolbar #bulk-move { max-width: 120px; }
+  .reader-actions .btn { padding: 6px 9px; }
+}
