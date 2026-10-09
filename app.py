@@ -1037,6 +1037,49 @@ def dns_plan(row: dict, settings: dict) -> list[dict]:
     return plan
 
 
+POLICY_RANK = {"none": 0, "quarantine": 1, "reject": 2}
+
+
+def adapt_plan(plan: list[dict], row: dict) -> list[dict]:
+    """Учесть уже опубликованные SPF и DMARC, чтобы рекомендация не ломала действующую почту."""
+    domain = row["name"]
+    explicit = row["dns_settings"] or {}
+    for rec in plan:
+        if rec["key"] == "spf":
+            live = [v for v in mailcore.dig(domain, "TXT") if v.lower().startswith("v=spf1")]
+            if len(live) == 1:
+                ours = rec["value"].split()
+                extra = []
+                for term in live[0].split()[1:]:
+                    low = term.lower()
+                    if low.startswith("redirect="):
+                        term = "include:" + term.split("=", 1)[1]
+                    elif low in ("-all", "~all", "?all", "+all", "all") or low.startswith("exp="):
+                        continue
+                    if term.lower() not in [o.lower() for o in ours] and term not in extra:
+                        extra.append(term)
+                if extra:
+                    rec["value"] = " ".join(ours[:-1] + extra + ours[-1:])
+                    rec["purpose"] += (" Рекомендация объединена с уже опубликованной записью «" + live[0] +
+                                       "»: замените её этой, а не добавляйте вторую.")
+        elif rec["key"] == "dmarc":
+            live = [v for v in mailcore.dig(f"_dmarc.{domain}", "TXT") if v.lower().startswith("v=dmarc1")]
+            if len(live) == 1 and "dmarc" not in explicit:
+                tags = mailcore.parse_tags(live[0])
+                want = mailcore.parse_tags(rec["value"])
+                if POLICY_RANK.get(tags.get("p"), -1) > POLICY_RANK.get(want.get("p"), 0):
+                    merged = {**want, **{k: v for k, v in tags.items() if k != "v"}}
+                    for key in ("rua", "fo"):
+                        if key not in tags and key in want:
+                            merged[key] = want[key]
+                    order = ["v", "p", "sp", "pct", "rua", "ruf", "adkim", "aspf", "fo", "ri"]
+                    merged["v"] = "DMARC1"
+                    rec["value"] = "; ".join(f"{k}={merged[k]}" for k in sorted(merged, key=lambda k: order.index(k) if k in order else 99))
+                    rec["purpose"] += (f" Опубликована более строгая политика p={tags.get('p')} — она сохранена; "
+                                       "добавлены только недостающие теги (адрес отчётов).")
+    return plan
+
+
 def check_record(rec: dict, row: dict, settings: dict) -> dict:
     t, name, want = rec["type"], rec["name"], rec["value"]
     host = (settings.get("hostname") or "").rstrip(".").lower()
@@ -1054,8 +1097,11 @@ def check_record(rec: dict, row: dict, settings: dict) -> dict:
     if t == "MX":
         hosts = [f.split()[-1].rstrip(".").lower() for f in found if f.split()]
         ok = host in hosts
-        result.update(status="ok" if ok else "fail",
-                      note="" if ok else ("MX нет" if not hosts else f"MX указывает на {', '.join(hosts)}, а не на {host}"))
+        if ok or not hosts:
+            result.update(status="ok" if ok else "fail", note="" if ok else "MX-записи нет: почту домена никто не принимает")
+        else:
+            result.update(status="warn", note=f"Почта домена сейчас обслуживается {', '.join(hosts)}. Меняйте MX на {host} "
+                                              "только после переноса ящиков, иначе письма перестанут приходить туда")
     elif t == "A":
         ok = bool(settings.get("public_ip")) and settings["public_ip"] in found
         result.update(status="ok" if ok else ("warn" if not settings.get("public_ip") else "fail"),
@@ -1093,7 +1139,7 @@ def check_record(rec: dict, row: dict, settings: dict) -> dict:
             tags = mailcore.parse_tags(dm[0])
             if tags.get("p") not in ("none", "quarantine", "reject"):
                 result["note"] = "Нет корректного тега p="
-            elif dm[0].replace(" ", "") == want.replace(" ", ""):
+            elif {k: v.lower() for k, v in tags.items()} == {k: v.lower() for k, v in mailcore.parse_tags(want).items()}:
                 result["status"] = "ok"
             else:
                 result.update(status="warn", note=f"Опубликована политика p={tags.get('p')}, отличается от рекомендуемой")
@@ -1113,6 +1159,7 @@ def domain_dns(domain_id: int):
         settings = get_settings(con)
     plan = dns_plan(row, settings)
     if request.args.get("check") == "1":
+        plan = adapt_plan(plan, row)
         for rec in plan:
             rec["check"] = check_record(rec, row, settings)
     return jsonify({"domain": row["name"], "records": plan,
@@ -1735,7 +1782,7 @@ def recommendations():
         elif domain["dkim_state"] == "pending":
             items.append(rec("warn", name, "DKIM-ключ создан, но подпись не включена",
                              "Опубликуйте TXT-запись и нажмите «Проверить и включить».", "Домены → DNS и DKIM", f"domain:{domain['id']}"))
-        plan = dns_plan(domain, settings)
+        plan = adapt_plan(dns_plan(domain, settings), domain)
         for record in plan:
             if record["key"] in ("ptr", "a") and not ip:
                 continue
