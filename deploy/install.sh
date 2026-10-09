@@ -32,7 +32,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq postfix postfix-pgsql dovecot-core dovecot-imapd dovecot-pop3d dovecot-lmtpd \
   dovecot-pgsql dovecot-sieve dovecot-managesieved rspamd redis-server postgresql sudo fail2ban \
-  python3-flask python3-psycopg2 python3-passlib python3-cryptography gunicorn dnsutils openssl >/dev/null
+  python3-flask python3-psycopg2 python3-passlib python3-cryptography gunicorn dnsutils openssl gnupg openssh-client >/dev/null
 
 mkdir -p "$BACKUP"
 cp -a /etc/postfix /etc/dovecot /etc/rspamd "$BACKUP/" 2>/dev/null || true

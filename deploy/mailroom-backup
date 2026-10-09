@@ -71,8 +71,10 @@ runuser -u postgres -- pg_dump -Fc mailroom > "$WORK/mailroom.dump"
 FILE="$DIR/mailroom-$(date +%Y%m%d-%H%M%S).tar.gz.gpg"
 # Письма копируются без остановки Dovecot: Maildir устойчив к такому копированию,
 # письма, пришедшие во время копирования, попадут в следующую копию.
-set +e
+command -v gpg >/dev/null || fail 'не установлен gpg (apt install gnupg)'
 EXTRA=(); [[ -d /var/lib/radicale ]] && EXTRA=(var/lib/radicale etc/radicale)
+trap - ERR
+set +e
 tar --numeric-owner --warning=no-file-changed -czf - \
   --exclude=var/lib/mailroom/backup-status.json \
   --transform 's,^var/vmail,vmail,;s,^var/lib/mailroom,mailroom-data,;s,^var/lib/radicale,radicale,' \
@@ -83,6 +85,7 @@ tar --numeric-owner --warning=no-file-changed -czf - \
         --symmetric --cipher-algo AES256 -o "$FILE.partial"
 codes=("${PIPESTATUS[@]}")
 set -e
+trap 'fail "строка $LINENO"' ERR
 # tar: 1 = «файл изменился во время чтения» (живой Maildir) — допустимо.
 (( codes[0] <= 1 && codes[1] == 0 )) || fail "tar=${codes[0]} gpg=${codes[1]}: $(tail -3 "$WORK/tar.err")"
 mv "$FILE.partial" "$FILE"
