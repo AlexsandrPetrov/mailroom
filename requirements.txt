@@ -1,4 +1,7 @@
+# На Debian 13 ставятся пакетами (deploy/install.sh): python3-flask python3-psycopg2
+# python3-passlib python3-cryptography gunicorn. Для запуска вне Debian:
 Flask>=3.0,<4
+psycopg2-binary>=2.9
 passlib>=1.7.4,<2
-imapclient>=2.3.0
-email-validator>=2.1.0
+cryptography>=42
+gunicorn>=22

@@ -1,5 +1,7 @@
 # Mailroom
 
+> Статус: работает на тестовом стенде автора с октября 2026 года. Перед рабочей почтой обкатайте на тестовом домене.
+
 Панель управления почтовым сервером (Postfix + Dovecot 2.4 + Rspamd) и веб-почта для пользователей. Debian 13, Flask, PostgreSQL.
 
 Домены, ящики и алиасы хранятся в PostgreSQL Mailroom. Postfix и Dovecot читают их напрямую через представления `mail_domains`, `mail_users`, `mail_aliases`, `mail_sender_login` (роль `mailserver`, только `SELECT`), поэтому изменения в панели действуют сразу, без перезагрузки сервисов.
@@ -43,10 +45,19 @@
 
 ## Установка и обновление
 
+Нужен чистый Debian 13 (подойдёт LXC или VM, от 2 ГБ памяти), доступ root.
+
 ```bash
-git clone … mailroom && cd mailroom
+apt install git
+git clone https://github.com/AlexsandrPetrov/mailroom.git /root/mailroom
+cd /root/mailroom
 sudo bash deploy/install.sh --hostname mail.example.com --ip 192.0.2.10
 ```
+
+`--hostname` — полное имя почтового сервера, `--ip` — адрес, на котором будет слушать панель (порт 5080).
+Обновление: `cd /root/mailroom && git pull && sudo bash deploy/install.sh --hostname … --ip …`.
+
+Подробная статья о почтовом сервере, на котором построена панель: https://tehalex.ru/pochtovyj-shlyuz-postfix/
 
 Скрипт можно запускать повторно — это и есть обновление. Он:
 
@@ -96,3 +107,7 @@ sudo mailroom mailbox-passwd АДРЕС | check [--no-send] | backup | restore �
 - `templates/`, `static/` — интерфейс без сборщика (ванильный JS, SVG-иконки).
 - `deploy/` — установщик и помощник.
 - `docs/PROMPT_WEBMAIL.md` — техническое задание на веб-почту.
+
+## Лицензия
+
+MIT, см. [LICENSE](LICENSE).
